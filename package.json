@@ -1,0 +1,10 @@
+{
+  "name": "entropy-fakeout",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A hard-disk gas simulation that appears to unmix itself at a chosen time.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "MIT"
+}

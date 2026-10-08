@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Entropy Fakeout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    /* Layout: one column led by the box; transport and timeline sit directly under it,
+       settings and notes share a two-column row below that stacks on phones. */
+    --bg: #e7ebef;
+    --surface: #f5f7f9;
+    --ink: #121a22;
+    --muted: #55616d;
+    --line: #c6cfd8;
+    --box: #fcfdfe;
+    --box-edge: #18222c;
+    --blue: #2361d6;
+    --red: #d63a2f;
+    --grey: #8a95a0;
+    --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --font-body: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0c1116;
+      --surface: #141b22;
+      --ink: #e2e8ee;
+      --muted: #8d99a5;
+      --line: #27323d;
+      --box: #080c10;
+      --box-edge: #b5c1cc;
+      --blue: #4d8bff;
+      --red: #ff5b4f;
+      --grey: #6e7a86;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0c1116;
+    --surface: #141b22;
+    --ink: #e2e8ee;
+    --muted: #8d99a5;
+    --line: #27323d;
+    --box: #080c10;
+    --box-edge: #b5c1cc;
+    --blue: #4d8bff;
+    --red: #ff5b4f;
+    --grey: #6e7a86;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    padding-inline: 16px;
+    padding-block: 28px 56px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.55 var(--font-body);
+  }
+  [hidden] { display: none !important; }
+
+  .wrap { max-width: 1040px; margin: 0 auto; display: grid; gap: 22px; }
+
+  header h1 {
+    margin: 0;
+    font-family: var(--font-display);
+    font-stretch: 125%;
+    font-weight: 800;
+    font-size: clamp(30px, 5.4vw, 48px);
+    line-height: 1.02;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+  }
+  header h1 .b { color: var(--blue); }
+  header h1 .r { color: var(--red); }
+  header p { margin: 8px 0 0; color: var(--muted); max-width: 64ch; }
+
+  .box-frame { border: 3px solid var(--box-edge); background: var(--box); }
+  #box { display: block; width: 100%; max-width: 100%; aspect-ratio: 16 / 9; touch-action: manipulation; }
+
+  .transport { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+  .readout {
+    font-family: var(--font-data);
+    font-variant-numeric: tabular-nums;
+    font-size: 14px;
+    white-space: nowrap;
+  }
+  .readout .k { color: var(--muted); margin-right: 6px; }
+  .transport .end { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+
+  button, select, input { font: inherit; color: inherit; }
+  button {
+    display: inline-flex; align-items: center; gap: 8px;
+    min-height: 38px; padding: 0 14px;
+    border: 1px solid var(--line); border-radius: 6px;
+    background: var(--surface); cursor: pointer;
+    font-weight: 600;
+  }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  button.primary:hover { opacity: 0.9; }
+  button:disabled { opacity: 0.55; cursor: progress; }
+  button svg { width: 14px; height: 14px; fill: currentColor; flex: none; }
+  #play { min-width: 104px; justify-content: center; }
+  :is(button, select, input, #timeline):focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+  select, input[type="number"] {
+    min-height: 36px; padding: 0 10px;
+    border: 1px solid var(--line); border-radius: 6px;
+    background: var(--surface);
+    font-family: var(--font-data); font-variant-numeric: tabular-nums; font-size: 14px;
+  }
+  select { font-family: var(--font-body); font-size: 14px; }
+  input[type="number"] { width: 100%; min-width: 0; }
+  label.check { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; white-space: nowrap; }
+  input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--ink); }
+
+  .timeline-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; margin-bottom: 6px; }
+  .eyebrow {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+  }
+  .timeline-head .hint { font-size: 13px; color: var(--muted); }
+  #timeline { display: block; width: 100%; height: 96px; cursor: ew-resize; touch-action: none; border-radius: 4px; }
+
+  .lower { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 36px; padding-top: 6px; }
+  @media (max-width: 780px) { .lower { grid-template-columns: minmax(0, 1fr); gap: 28px; } }
+  .lower > section { min-width: 0; border-top: 2px solid var(--ink); padding-top: 14px; }
+  h2 { margin: 0 0 12px; font-family: var(--font-display); font-stretch: 112%; font-size: 20px; font-weight: 750; text-wrap: balance; }
+  h3 { margin: 18px 0 4px; font-size: 15px; font-weight: 700; }
+
+  fieldset { border: 0; margin: 0 0 16px; padding: 0; min-width: 0; }
+  legend { padding: 0; margin-bottom: 8px; }
+  legend .note { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); }
+  .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
+  .field { display: grid; gap: 4px; min-width: 0; }
+  .field > span, .field > label { font-size: 13px; color: var(--muted); }
+  .field > span b { color: var(--ink); font-weight: 600; }
+  .seed-row { display: flex; gap: 6px; }
+  .seed-row button { min-height: 36px; padding: 0 10px; font-weight: 500; }
+  .checks { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 12px; }
+
+  .run-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+  #pending { font-size: 13px; color: var(--muted); }
+  .status { margin-top: 12px; font-family: var(--font-data); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .status p { margin: 0 0 2px; }
+  .status .error { color: var(--red); font-family: var(--font-body); font-size: 14px; }
+
+  ol.steps { margin: 0; padding: 0; list-style: none; counter-reset: step; display: grid; gap: 12px; }
+  ol.steps li { counter-increment: step; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 2px 10px; }
+  ol.steps li::before {
+    content: counter(step);
+    grid-row: span 2;
+    width: 24px; height: 24px; border-radius: 50%;
+    display: grid; place-items: center;
+    border: 1.5px solid var(--ink);
+    font-family: var(--font-data); font-size: 12px; font-weight: 500;
+  }
+  ol.steps strong { font-weight: 700; }
+  ol.steps p, .notes p { margin: 0; color: var(--muted); max-width: 62ch; }
+  .notes p + p { margin-top: 8px; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: 0; margin-right: 3px; }
+  .swatch.b { background: var(--blue); }
+  .swatch.r { background: var(--red); }
+
+  @media (max-width: 520px) {
+    .transport .end { margin-left: 0; }
+    .fields { grid-template-columns: minmax(0, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Entropy <span class="b">Fake</span><span class="r">out</span></h1>
+    <p>An ordinary elastic gas that appears to unmix itself. The physics is untouched. The colours are assigned afterwards, from where each particle happens to be at the sort time.</p>
+  </header>
+
+  <div class="box-frame"><canvas id="box" aria-label="Particles bouncing in a box"></canvas></div>
+
+  <div class="transport">
+    <button id="play" class="primary" type="button" aria-label="Play">
+      <svg id="icon-play" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 1l11 6-11 6z"/></svg>
+      <svg id="icon-pause" viewBox="0 0 14 14" aria-hidden="true" hidden><path d="M2 1h3.5v12H2zM8.5 1H12v12H8.5z"/></svg>
+      <span id="play-label">Play</span>
+    </button>
+    <button id="restart" type="button">
+      <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 1h2v12H1zM13 1v12L4 7z"/></svg>
+      Restart
+    </button>
+    <span class="readout"><span class="k">t</span><span id="time-readout">0.00 s</span></span>
+    <span class="readout"><span class="k">sorted</span><span id="order-readout">–</span></span>
+    <div class="end">
+      <label class="check" for="rate">Speed
+        <select id="rate">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+        </select>
+      </label>
+      <label class="check" for="loop"><input id="loop" type="checkbox" checked> Loop</label>
+    </div>
+  </div>
+
+  <div>
+    <div class="timeline-head">
+      <span class="eyebrow">Sortedness vs time, s</span>
+      <span class="hint">Share of particles on their own colour's side. 50% is fully mixed. Drag to scrub.</span>
+    </div>
+    <canvas id="timeline" tabindex="0" role="slider" aria-label="Playback position" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"></canvas>
+  </div>
+
+  <div class="lower">
+    <section aria-labelledby="settings-title">
+      <h2 id="settings-title">Settings</h2>
+      <form id="settings" novalidate>
+        <fieldset>
+          <legend class="eyebrow">Simulation <span class="note">· applies when you run the simulation</span></legend>
+          <div class="fields">
+            <label class="field" for="n"><span>Particles <b>(even)</b></span>
+              <input id="n" type="number" min="2" max="1000" step="2" value="200" inputmode="numeric"></label>
+            <label class="field" for="radius"><span>Radius, px</span>
+              <input id="radius" type="number" min="1" max="40" step="0.5" value="6" inputmode="decimal"></label>
+            <label class="field" for="speed"><span>RMS speed, px/s</span>
+              <input id="speed" type="number" min="10" max="2000" step="10" value="300" inputmode="decimal"></label>
+            <label class="field" for="duration"><span>Duration, s</span>
+              <input id="duration" type="number" min="1" max="120" step="1" value="30" inputmode="decimal"></label>
+            <div class="field">
+              <label for="seed">Random seed</label>
+              <div class="seed-row">
+                <input id="seed" type="number" min="0" max="4294967295" step="1" value="1" inputmode="numeric">
+                <button id="reseed" type="button" title="Pick a random seed">New</button>
+              </div>
+            </div>
+          </div>
+        </fieldset>
+        <div class="run-row">
+          <button id="run" class="primary" type="submit">Run simulation</button>
+          <span id="pending" hidden>Run the simulation to apply these changes.</span>
+        </div>
+
+        <fieldset style="margin-top: 22px">
+          <legend class="eyebrow">Labels <span class="note">· apply instantly</span></legend>
+          <div class="fields">
+            <label class="field" for="sort-time"><span>Sort time, s</span>
+              <input id="sort-time" type="number" min="0" step="0.5" value="15" inputmode="decimal"></label>
+            <label class="field" for="split"><span>Dividing line</span>
+              <select id="split">
+                <option value="even" selected>Half each (line near centre)</option>
+                <option value="centre">Exact centre (counts may differ)</option>
+              </select></label>
+          </div>
+          <div class="checks">
+            <label class="check" for="colour"><input id="colour" type="checkbox" checked> Colour particles</label>
+            <label class="check" for="show-line"><input id="show-line" type="checkbox"> Show dividing line</label>
+          </div>
+        </fieldset>
+      </form>
+      <div class="status" id="status" aria-live="polite"></div>
+    </section>
+
+    <section class="notes" aria-labelledby="how-title">
+      <h2 id="how-title">How the trick works</h2>
+      <ol class="steps">
+        <li><strong>Simulate without colour</strong>
+          <p>Hard disks in a box. Every collision, disk on disk or disk on wall, is perfectly elastic and is resolved at the exact moment it happens, so nothing gains or loses energy. Every frame is recorded.</p></li>
+        <li><strong>Label at the sort time</strong>
+          <p>Look at the recorded frame at the sort time. Particles left of the dividing line become <span class="swatch b"></span>blue and the rest become <span class="swatch r"></span>red.</p></li>
+        <li><strong>Play the recording back</strong>
+          <p>The motion is identical, only now it has colours. The gas looks mixed, sorts itself at the sort time, then mixes again.</p></li>
+      </ol>
+      <h3>Why replay a recording?</h3>
+      <p>A gas of colliding disks is chaotic. A difference in the 16th decimal place, from a different time step or frame rate, grows until the two runs have nothing in common after a few dozen collisions. Replaying the recording guarantees you watch the same run that was labelled.</p>
+      <h3>Choosing a sort time</h3>
+      <p>The gas mixes by diffusion, which is slow. If the sort time is too early, the opening frame still remembers the sorted state and the trick shows. The curve above should start and end near 50%. A denser, slower gas or a wider box needs a later sort time.</p>
+    </section>
+  </div>
+</div>
+<script src="sim.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

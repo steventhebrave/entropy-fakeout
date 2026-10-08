@@ -1,0 +1,419 @@
+/*
+ * Entropy Fakeout: physics core.
+ *
+ * An event-driven hard-disk gas in a rectangular box. Collisions between
+ * disks and with the walls are perfectly elastic and are resolved at the
+ * exact instant they happen (no time step, no overlap, no damping), so
+ * kinetic energy is conserved to rounding error.
+ *
+ * The trick: simulate once with no colours, record every frame, then label
+ * each particle by which side of the box it is on at the chosen "sort time".
+ * Replaying the recording with those labels makes the gas look as if it
+ * unmixes itself at that moment.
+ *
+ * Works both in the browser (window.EntropySim) and in Node (require).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.EntropySim = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const WALL_X = -1; // event partner id for a left/right wall
+  const WALL_Y = -2; // event partner id for a top/bottom wall
+
+  const BLUE = 0;
+  const RED = 1;
+
+  // Small, fast, seedable PRNG so a seed always gives the same gas.
+  function mulberry32(seed) {
+    let a = seed >>> 0;
+    return function () {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function gaussian(rand) {
+    let u = 0;
+    while (u === 0) u = rand();
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand());
+  }
+
+  // Binary min-heap of events ordered by time.
+  class EventQueue {
+    constructor() {
+      this.items = [];
+    }
+
+    get size() {
+      return this.items.length;
+    }
+
+    peek() {
+      return this.items[0];
+    }
+
+    push(event) {
+      const items = this.items;
+      items.push(event);
+      let k = items.length - 1;
+      while (k > 0) {
+        const parent = (k - 1) >> 1;
+        if (items[parent].t <= event.t) break;
+        items[k] = items[parent];
+        k = parent;
+      }
+      items[k] = event;
+    }
+
+    pop() {
+      const items = this.items;
+      const top = items[0];
+      const last = items.pop();
+      if (items.length > 0) {
+        let k = 0;
+        const n = items.length;
+        for (;;) {
+          let child = 2 * k + 1;
+          if (child >= n) break;
+          if (child + 1 < n && items[child + 1].t < items[child].t) child++;
+          if (items[child].t >= last.t) break;
+          items[k] = items[child];
+          k = child;
+        }
+        items[k] = last;
+      }
+      return top;
+    }
+  }
+
+  /*
+   * Random non-overlapping positions and 2D Maxwell-Boltzmann velocities,
+   * with zero net momentum and the requested RMS speed.
+   */
+  function createInitialState(opts) {
+    const { n, radius, width, height, speed, seed } = opts;
+    if (!(n > 0)) throw new Error('Particle count must be at least 1.');
+    if (2 * radius >= Math.min(width, height)) throw new Error('Particles are too big for the box.');
+    const rand = mulberry32(seed);
+    const x = new Float64Array(n);
+    const y = new Float64Array(n);
+    const vx = new Float64Array(n);
+    const vy = new Float64Array(n);
+
+    // Random sequential placement, using a grid so each check is local.
+    const minDist2 = 4 * radius * radius;
+    const cell = 2 * radius;
+    const cols = Math.max(1, Math.floor(width / cell));
+    const rows = Math.max(1, Math.floor(height / cell));
+    const grid = new Map();
+    const key = (cx, cy) => cy * cols + cx;
+    const maxAttempts = 2000;
+    for (let i = 0; i < n; i++) {
+      let placed = false;
+      for (let attempt = 0; attempt < maxAttempts && !placed; attempt++) {
+        const px = radius + rand() * (width - 2 * radius);
+        const py = radius + rand() * (height - 2 * radius);
+        const cx = Math.min(cols - 1, Math.floor(px / cell));
+        const cy = Math.min(rows - 1, Math.floor(py / cell));
+        let clear = true;
+        for (let gy = cy - 1; gy <= cy + 1 && clear; gy++) {
+          for (let gx = cx - 1; gx <= cx + 1 && clear; gx++) {
+            const bucket = grid.get(key(gx, gy));
+            if (!bucket) continue;
+            for (const j of bucket) {
+              const dx = x[j] - px;
+              const dy = y[j] - py;
+              if (dx * dx + dy * dy < minDist2) {
+                clear = false;
+                break;
+              }
+            }
+          }
+        }
+        if (clear) {
+          x[i] = px;
+          y[i] = py;
+          const k = key(cx, cy);
+          if (!grid.has(k)) grid.set(k, []);
+          grid.get(k).push(i);
+          placed = true;
+        }
+      }
+      if (!placed) {
+        throw new Error(
+          `Could not fit ${n} particles of radius ${radius} in the box. Use fewer or smaller particles.`
+        );
+      }
+    }
+
+    let mx = 0;
+    let my = 0;
+    for (let i = 0; i < n; i++) {
+      vx[i] = gaussian(rand);
+      vy[i] = gaussian(rand);
+      mx += vx[i];
+      my += vy[i];
+    }
+    mx /= n;
+    my /= n;
+    let sumSq = 0;
+    for (let i = 0; i < n; i++) {
+      if (n > 1) {
+        vx[i] -= mx;
+        vy[i] -= my;
+      }
+      sumSq += vx[i] * vx[i] + vy[i] * vy[i];
+    }
+    const scale = sumSq > 0 ? speed / Math.sqrt(sumSq / n) : 0;
+    for (let i = 0; i < n; i++) {
+      vx[i] *= scale;
+      vy[i] *= scale;
+    }
+
+    return { n, radius, width, height, x, y, vx, vy };
+  }
+
+  /*
+   * Event-driven simulator. Each particle keeps exactly one pending event in
+   * the queue (its earliest predicted collision). Events carry the collision
+   * counts of their particles at prediction time, so an event is stale once
+   * either particle has collided since.
+   */
+  class Simulator {
+    constructor(state) {
+      this.n = state.n;
+      this.r = state.radius;
+      this.width = state.width;
+      this.height = state.height;
+      this.x = Float64Array.from(state.x);
+      this.y = Float64Array.from(state.y);
+      this.vx = Float64Array.from(state.vx);
+      this.vy = Float64Array.from(state.vy);
+      this.t = 0;
+      this.count = new Uint32Array(this.n);
+      this.queue = new EventQueue();
+      this.particleCollisions = 0;
+      this.wallCollisions = 0;
+      for (let i = 0; i < this.n; i++) this.predict(i);
+    }
+
+    // Time until disks i and j touch, or Infinity if they never will.
+    pairTime(i, j) {
+      const dx = this.x[j] - this.x[i];
+      const dy = this.y[j] - this.y[i];
+      const dvx = this.vx[j] - this.vx[i];
+      const dvy = this.vy[j] - this.vy[i];
+      const dvdr = dx * dvx + dy * dvy;
+      if (dvdr >= 0) return Infinity;
+      const dvdv = dvx * dvx + dvy * dvy;
+      const gap = dx * dx + dy * dy - 4 * this.r * this.r;
+      const d = dvdr * dvdr - dvdv * gap;
+      if (d < 0) return Infinity;
+      // Algebraically equal to -(dvdr + sqrt(d)) / dvdv, but without the
+      // cancellation error that form has for near-grazing collisions.
+      return gap / (-dvdr + Math.sqrt(d));
+    }
+
+    predict(i) {
+      const { x, y, vx, vy, r } = this;
+      let best = Infinity;
+      let partner = WALL_X;
+
+      if (vx[i] > 0) best = (this.width - r - x[i]) / vx[i];
+      else if (vx[i] < 0) best = (r - x[i]) / vx[i];
+
+      let dt = Infinity;
+      if (vy[i] > 0) dt = (this.height - r - y[i]) / vy[i];
+      else if (vy[i] < 0) dt = (r - y[i]) / vy[i];
+      if (dt < best) {
+        best = dt;
+        partner = WALL_Y;
+      }
+
+      for (let j = 0; j < this.n; j++) {
+        if (j === i) continue;
+        dt = this.pairTime(i, j);
+        if (dt < best) {
+          best = dt;
+          partner = j;
+        }
+      }
+
+      if (best === Infinity) return;
+      this.queue.push({
+        t: this.t + Math.max(0, best),
+        i,
+        j: partner,
+        ci: this.count[i],
+        cj: partner >= 0 ? this.count[partner] : 0,
+      });
+    }
+
+    drift(t) {
+      const dt = t - this.t;
+      if (dt === 0) return;
+      const { x, y, vx, vy, n } = this;
+      for (let k = 0; k < n; k++) {
+        x[k] += vx[k] * dt;
+        y[k] += vy[k] * dt;
+      }
+      this.t = t;
+    }
+
+    // Elastic collision of equal-mass disks: swap the velocity components
+    // along the line of centres.
+    bounce(i, j) {
+      const { x, y, vx, vy } = this;
+      const dx = x[j] - x[i];
+      const dy = y[j] - y[i];
+      const dvdr = dx * (vx[j] - vx[i]) + dy * (vy[j] - vy[i]);
+      const k = dvdr / (dx * dx + dy * dy);
+      vx[i] += k * dx;
+      vy[i] += k * dy;
+      vx[j] -= k * dx;
+      vy[j] -= k * dy;
+    }
+
+    advanceTo(tEnd) {
+      const q = this.queue;
+      while (q.size > 0 && q.peek().t <= tEnd) {
+        const e = q.pop();
+        const { i, j } = e;
+        if (e.ci !== this.count[i]) continue; // i already has a newer event
+        this.drift(e.t);
+        if (j >= 0) {
+          if (e.cj !== this.count[j]) {
+            // The partner changed course, so this prediction is void.
+            this.predict(i);
+            continue;
+          }
+          this.bounce(i, j);
+          this.count[i]++;
+          this.count[j]++;
+          this.particleCollisions++;
+          this.predict(i);
+          this.predict(j);
+        } else {
+          if (j === WALL_X) this.vx[i] = -this.vx[i];
+          else this.vy[i] = -this.vy[i];
+          this.count[i]++;
+          this.wallCollisions++;
+          this.predict(i);
+        }
+      }
+      this.drift(tEnd);
+    }
+
+    kineticEnergy() {
+      let e = 0;
+      for (let k = 0; k < this.n; k++) e += this.vx[k] * this.vx[k] + this.vy[k] * this.vy[k];
+      return 0.5 * e;
+    }
+  }
+
+  /*
+   * Run the simulation and store every particle position at every frame.
+   * frames[(f * n + i) * 2] is x, the next entry is y.
+   *
+   * Pass onProgress to receive (doneFrames, totalFrames); return a promise
+   * from it to let the caller yield (e.g. to keep a page responsive).
+   */
+  async function record(state, opts) {
+    const { duration, fps, onProgress, chunk = 30 } = opts;
+    const sim = new Simulator(state);
+    const n = state.n;
+    const frameCount = Math.floor(duration * fps + 1e-9) + 1;
+    const frames = new Float32Array(frameCount * n * 2);
+    const energyStart = sim.kineticEnergy();
+    for (let f = 0; f < frameCount; f++) {
+      sim.advanceTo(f / fps);
+      const base = f * n * 2;
+      for (let i = 0; i < n; i++) {
+        frames[base + 2 * i] = sim.x[i];
+        frames[base + 2 * i + 1] = sim.y[i];
+      }
+      if (onProgress && (f + 1) % chunk === 0) await onProgress(f + 1, frameCount);
+    }
+    if (onProgress) await onProgress(frameCount, frameCount);
+    return {
+      n,
+      radius: state.radius,
+      width: state.width,
+      height: state.height,
+      fps,
+      frameCount,
+      frames,
+      particleCollisions: sim.particleCollisions,
+      wallCollisions: sim.wallCollisions,
+      energyStart,
+      energyEnd: sim.kineticEnergy(),
+    };
+  }
+
+  /*
+   * Colour the particles from their positions at the sort time, so that
+   * every blue particle is left of every red one at exactly that frame.
+   *
+   * split: 'even'   exactly half of each colour; the dividing line falls
+   *                 midway between the two middle particles, which is near
+   *                 (but not exactly on) the centre of the box.
+   *        'centre' the dividing line is the centre of the box; the two
+   *                 colours can differ in number by a few particles.
+   */
+  function assignColours(rec, sortTime, split = 'even') {
+    const { n, frames, fps, frameCount, width } = rec;
+    const frame = Math.max(0, Math.min(frameCount - 1, Math.round(sortTime * fps)));
+    const base = frame * n * 2;
+    const labels = new Uint8Array(n);
+    let boundary = width / 2;
+
+    if (split === 'centre') {
+      for (let i = 0; i < n; i++) labels[i] = frames[base + 2 * i] < boundary ? BLUE : RED;
+    } else {
+      const order = Array.from({ length: n }, (_, i) => i);
+      order.sort((a, b) => frames[base + 2 * a] - frames[base + 2 * b]);
+      const blues = Math.floor(n / 2);
+      order.forEach((i, rank) => {
+        labels[i] = rank < blues ? BLUE : RED;
+      });
+      if (blues > 0 && blues < n) {
+        boundary = (frames[base + 2 * order[blues - 1]] + frames[base + 2 * order[blues]]) / 2;
+      }
+    }
+
+    return { labels, frame, time: frame / fps, split, boundary };
+  }
+
+  // Fraction of particles on "their" side of the dividing line: blue left,
+  // red right. About 0.5 when mixed, exactly 1 at the sort time.
+  function sortedness(rec, labels, boundary) {
+    const { n, frames, frameCount } = rec;
+    const out = new Float32Array(frameCount);
+    for (let f = 0; f < frameCount; f++) {
+      const base = f * n * 2;
+      let good = 0;
+      for (let i = 0; i < n; i++) {
+        const left = frames[base + 2 * i] < boundary;
+        if (left === (labels[i] === BLUE)) good++;
+      }
+      out[f] = good / n;
+    }
+    return out;
+  }
+
+  return {
+    BLUE,
+    RED,
+    mulberry32,
+    createInitialState,
+    Simulator,
+    record,
+    assignColours,
+    sortedness,
+  };
+});
