@@ -39,6 +39,7 @@
     simFields: $('sim-fields'),
     labelFields: $('label-fields'),
     tries: $('tries'),
+    maxClump: $('max-clump'),
     search: $('search'),
     searchStatus: $('search-status'),
     reset: $('reset'),
@@ -55,6 +56,7 @@
     run: 0, // increments per simulation so a stale run can be abandoned
     ranWith: null, // physics settings of the current recording
     statsText: '',
+    clump: null, // clumpiness of the opening frame
     resumeAfterRun: false, // carry on playing after a rerun
     searching: false,
     stopSearch: false,
@@ -87,7 +89,7 @@
   // Remembered in this browser between visits.
   const STORAGE_KEY = 'entropy-fakeout:settings';
   const SAVED = ['start', 'gap', 'n', 'radius', 'speed', 'duration', 'seed', 'sort-time',
-    'split', 'colour', 'show-line', 'loop', 'rate', 'tries'];
+    'split', 'colour', 'show-line', 'loop', 'rate', 'tries', 'max-clump'];
 
   function saveSettings() {
     const data = {};
@@ -381,6 +383,7 @@
     const sortTime = num(el.sortTime, 15, 0, lastTime());
     state.sort = Sim.assignColours(rec, sortTime, el.split.value);
     state.order = Sim.sortedness(rec, state.sort.labels, state.sort.boundary);
+    state.clump = Sim.clumpiness(rec.frames, 0, rec.n, state.sort.labels, rec);
     showStatus();
     render();
   }
@@ -409,6 +412,12 @@
           ? 'line at the centre'
           : `line at x = ${boundary.toFixed(1)} (centre is ${state.rec.width / 2})`);
       el.status.append(p);
+      const open = document.createElement('p');
+      const c = state.clump;
+      open.textContent =
+        `Opening frame ${pct(state.order[0])} sorted` +
+        (c ? ` · clumpiness ${pct(c.worst)} (top left ${pct(c.topLeft)}, bottom right ${pct(c.bottomRight)})` : '');
+      el.status.append(open);
     }
   }
 
@@ -512,6 +521,7 @@
     el.simFields.disabled = on;
     el.labelFields.disabled = on;
     el.tries.disabled = on;
+    el.maxClump.disabled = on || el.start.value !== 'corners';
     el.run.disabled = on;
     el.reset.disabled = on;
   }
@@ -524,8 +534,8 @@
         onmessage = async (e) => {
           const { base, opts, index, seed } = e.data;
           try {
-            const mix = await Sim.openingMix(Sim.createInitialState({ ...base, seed }), opts);
-            postMessage({ index, seed, mix });
+            const stats = await Sim.openingStats(Sim.createInitialState({ ...base, seed }), opts);
+            postMessage({ index, seed, mix: stats.mix, clump: stats.clump });
           } catch (err) {
             postMessage({ index, seed, error: err.message });
           }
@@ -586,11 +596,11 @@
       const index = job.handed++;
       const seed = job.seedFor(index);
       try {
-        const mix = await Sim.openingMix(Sim.createInitialState({ ...job.base, seed }), {
+        const stats = await Sim.openingStats(Sim.createInitialState({ ...job.base, seed }), {
           ...job.opts,
           onProgress: () => (state.stopSearch ? Promise.reject(new Error('stopped')) : breathe()),
         });
-        job.take({ index, seed, mix });
+        job.take({ index, seed, ...stats });
       } catch (err) {
         if (state.stopSearch) return;
         job.take({ index, seed, error: err.message });
@@ -618,6 +628,10 @@
       return report(err.message);
     }
 
+    // Clumpiness only applies to the corner start. An empty box means no limit.
+    const limit = parseFloat(el.maxClump.value);
+    const maxClump = settings.start === 'corners' && Number.isFinite(limit) ? limit / 100 : null;
+
     // The current seed goes first, so it wins any tie. The rest are random,
     // unique, and drawn from the full 32-bit range so long searches don't
     // run out.
@@ -630,10 +644,12 @@
         split: el.split.value,
       },
       tries,
+      maxClump,
       handed: 0,
       done: 0,
-      best: null,
-      worst: null,
+      passed: 0, // within the clumpiness limit
+      best: null, // closest to 50% among those within the limit
+      leastClumpy: null,
       perfect: false,
       error: null,
       cores: 0,
@@ -645,9 +661,9 @@
         used.add(seed);
         return seed;
       },
-      // Nothing can beat exactly 50%, so stop handing out seeds once one
-      // scores that. Seeds already running still finish, and the earliest
-      // perfect seed wins.
+      // Nothing can beat exactly 50% within the limit, so stop handing out
+      // seeds once one scores that. Seeds already running still finish, and
+      // the earliest perfect seed wins.
       over() {
         return this.handed >= this.tries || this.perfect || this.error || state.stopSearch;
       },
@@ -657,14 +673,21 @@
           return;
         }
         this.done++;
-        const better = (a, b) => distance(a) < distance(b) || (distance(a) === distance(b) && a.index < b.index);
-        if (!this.best || better(result, this.best)) this.best = result;
-        if (!this.worst || distance(result) > distance(this.worst)) this.worst = result;
-        if (result.mix === 0.5) this.perfect = true;
+        if (result.clump && (!this.leastClumpy || result.clump.worst < this.leastClumpy.clump.worst)) {
+          this.leastClumpy = result;
+        }
+        if (Sim.acceptable(result, this.maxClump)) {
+          this.passed++;
+          const better = (a, b) => distance(a) < distance(b) || (distance(a) === distance(b) && a.index < b.index);
+          if (!this.best || better(result, this.best)) this.best = result;
+          if (result.mix === 0.5) this.perfect = true;
+        }
         progress();
       },
     };
 
+    const describe = (r) =>
+      `seed ${r.seed}, opening frame ${pct(r.mix)} sorted` + (r.clump ? `, clumpiness ${pct(r.clump.worst)}` : '');
     const started = performance.now();
     const rate = () => job.done / Math.max(0.001, (performance.now() - started) / 1000);
     const cores = () => (job.cores === 1 ? '1 core' : `${job.cores} cores`);
@@ -675,7 +698,8 @@
       lastReport = now;
       report(
         `Tried ${fmt(job.done)} of ${fmt(tries)} · ${rate().toFixed(0)} seeds/s on ${cores()} · ` +
-          `best so far: seed ${job.best.seed}, opening frame ${pct(job.best.mix)} sorted`
+          (maxClump == null ? '' : `${fmt(job.passed)} within the clumpiness limit · `) +
+          (job.best ? `best so far: ${describe(job.best)}` : 'none within the limit yet')
       );
     };
 
@@ -691,20 +715,25 @@
     setSearching(false);
 
     if (job.error) return report(job.error);
-    if (!job.best) return report('Search stopped before any seed finished.');
+    if (job.done === 0) return report('Search stopped before any seed finished.');
+    if (!job.best) {
+      return report(
+        `None of the ${fmt(job.done)} seeds tried had clumpiness at or below ${pct(maxClump)}. ` +
+          `The least clumpy was seed ${job.leastClumpy.seed} at ${pct(job.leastClumpy.clump.worst)}. ` +
+          'Raise the limit or try more seeds.'
+      );
+    }
     const best = job.best;
     const speed = `${rate().toFixed(0)} seeds/s on ${cores()}`;
+    const passed = maxClump == null ? '' : `${fmt(job.passed)} of ${fmt(job.done)} were within the clumpiness limit. `;
     if (best.mix === 0.5) {
       report(
-        `Seed ${best.seed} opens exactly 50.0% sorted, found after ${fmt(job.done)} ` +
-          `${job.done === 1 ? 'try' : 'tries'} (${speed}). Stopped there, since nothing can beat it.`
+        `Found ${describe(best)} after ${fmt(job.done)} ${job.done === 1 ? 'try' : 'tries'}. ` +
+          `${passed}Stopped there, since no seed can beat an exact 50% (${speed}).`
       );
     } else {
       const scope = job.done < tries ? `Stopped after ${fmt(job.done)} of ${fmt(tries)} seeds` : `Best of ${fmt(job.done)} seeds`;
-      report(
-        `${scope}: seed ${best.seed}, opening frame ${pct(best.mix)} sorted. ` +
-          `The furthest from mixed was ${pct(job.worst.mix)}. ${speed}.`
-      );
+      report(`${scope}: ${describe(best)}. ${passed}${speed}.`);
     }
     el.seed.value = String(best.seed);
     saveSettings();
@@ -722,6 +751,7 @@
   }
   const syncStart = () => {
     el.gap.disabled = el.start.value !== 'corners';
+    el.maxClump.disabled = el.start.value !== 'corners' || state.searching;
   };
   el.start.addEventListener('change', () => {
     syncStart();

@@ -239,7 +239,7 @@
       vy[i] *= scale;
     }
 
-    return { n, radius, width, height, x, y, vx, vy };
+    return { n, radius, width, height, start, gap, x, y, vx, vy };
   }
 
   /*
@@ -416,6 +416,8 @@
       radius: state.radius,
       width: state.width,
       height: state.height,
+      start: state.start,
+      gap: state.gap,
       fps,
       frameCount,
       frames,
@@ -483,15 +485,51 @@
   }
 
   /*
-   * How sorted the opening frame looks once the particles are labelled at
-   * the sort time. 0.5 is perfectly mixed.
+   * How grouped the colours are within each corner cluster at the start: the
+   * share of neighbouring pairs (adjacent in the packing) that have the same
+   * colour. About 0.5 for a random mix, 1 when each colour sits in its own
+   * patch. Returns { topLeft, bottomRight, worst } for a corner start, or
+   * null otherwise. frames/base locate the opening frame.
+   */
+  function clumpiness(frames, base, n, labels, layout) {
+    if (layout.start === 'random') return null;
+    // Packing neighbours are one pitch apart; the next nearest are sqrt(3)
+    // pitches away, so 1.5 pitches separates the two.
+    const reach = 1.5 * 2 * layout.radius * (1 + layout.gap);
+    const reach2 = reach * reach;
+    const corner = (from, to) => {
+      let same = 0;
+      let pairs = 0;
+      for (let i = from; i < to; i++) {
+        const xi = frames[base + 2 * i];
+        const yi = frames[base + 2 * i + 1];
+        for (let j = i + 1; j < to; j++) {
+          const dx = frames[base + 2 * j] - xi;
+          const dy = frames[base + 2 * j + 1] - yi;
+          if (dx * dx + dy * dy > reach2) continue;
+          pairs++;
+          if (labels[i] === labels[j]) same++;
+        }
+      }
+      return pairs ? same / pairs : 0.5;
+    };
+    const topLeft = Math.ceil(n / 2); // placeCorners puts these first
+    const a = corner(0, topLeft);
+    const b = corner(topLeft, n);
+    return { topLeft: a, bottomRight: b, worst: Math.max(a, b) };
+  }
+
+  /*
+   * What the opening frame looks like once the particles are labelled at the
+   * sort time: { mix, clump }. mix is how sorted it is (0.5 is perfectly
+   * mixed); clump is clumpiness() or null.
    *
    * Only simulates up to the sort time and only keeps two frames, but steps
    * frame by frame exactly as record() does. Rounding differs if you step
    * any other way, and in a chaotic gas that would lead to a different
    * trajectory, so this is what guarantees the answer matches the full run.
    */
-  async function openingMix(state, opts) {
+  async function openingStats(state, opts) {
     const { sortTime, fps, split = 'even', onProgress, chunk = 30 } = opts;
     const n = state.n;
     const sortFrame = Math.max(0, Math.round(sortTime * fps));
@@ -510,22 +548,34 @@
       if (onProgress && (f + 1) % chunk === 0) await onProgress(f + 1, sortFrame + 1);
     }
     const { labels, boundary } = labelFrame(frames, n * 2, n, state.width, split);
-    return sortednessAt({ n, frames }, labels, boundary, 0);
+    return {
+      mix: sortednessAt({ n, frames }, labels, boundary, 0),
+      clump: clumpiness(frames, 0, n, labels, state),
+    };
+  }
+
+  // Can this seed be used? Clumpiness only limits corner starts.
+  function acceptable(stats, maxClump) {
+    return maxClump == null || stats.clump == null || stats.clump.worst <= maxClump;
   }
 
   /*
-   * Try each seed with otherwise identical settings and return the one whose
-   * opening frame is closest to perfectly mixed: { seed, mix }. Ties go to
-   * the earlier seed. opts are as for openingMix, plus onSeed(done, total,
-   * seed, mix), which may return a promise.
+   * Try each seed with otherwise identical settings and return the
+   * acceptable one (clumpiness at most opts.maxClump, if given) whose
+   * opening frame is closest to perfectly mixed: { seed, mix, clump }, or
+   * null if none is acceptable. Ties go to the earlier seed. opts are as for
+   * openingStats, plus onSeed(done, total, seed, stats), which may return a
+   * promise.
    */
   async function findBestSeed(base, seeds, opts) {
     let best = null;
     for (let k = 0; k < seeds.length; k++) {
       const seed = seeds[k];
-      const mix = await openingMix(createInitialState({ ...base, seed }), opts);
-      if (!best || Math.abs(mix - 0.5) < Math.abs(best.mix - 0.5)) best = { seed, mix };
-      if (opts.onSeed) await opts.onSeed(k + 1, seeds.length, seed, mix);
+      const stats = await openingStats(createInitialState({ ...base, seed }), opts);
+      if (acceptable(stats, opts.maxClump)) {
+        if (!best || Math.abs(stats.mix - 0.5) < Math.abs(best.mix - 0.5)) best = { seed, ...stats };
+      }
+      if (opts.onSeed) await opts.onSeed(k + 1, seeds.length, seed, stats);
     }
     return best;
   }
@@ -539,7 +589,9 @@
     record,
     assignColours,
     sortedness,
-    openingMix,
+    clumpiness,
+    openingStats,
+    acceptable,
     findBestSeed,
   };
 });

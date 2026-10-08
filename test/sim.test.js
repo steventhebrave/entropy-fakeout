@@ -151,16 +151,63 @@ test('seed search reports the opening mix that the full run shows', async () => 
   const seen = [];
   const best = await Sim.findBestSeed(base, [3, 4, 5, 6], {
     ...opts,
-    onSeed: (done, total, seed, mix) => seen.push({ seed, mix }),
+    onSeed: (done, total, seed, stats) => seen.push({ seed, ...stats }),
   });
   assert.equal(seen.length, 4);
   const closest = Math.min(...seen.map((r) => Math.abs(r.mix - 0.5)));
   assert.equal(Math.abs(best.mix - 0.5), closest);
 
   // A full-length recording of each seed agrees with what the search saw.
-  for (const { seed, mix } of seen) {
+  for (const { seed, mix, clump } of seen) {
     const rec = await Sim.record(Sim.createInitialState({ ...base, seed }), { duration: 6, fps: 60 });
     const { labels, boundary } = Sim.assignColours(rec, opts.sortTime, opts.split);
     assert.equal(Sim.sortedness(rec, labels, boundary)[0], Math.fround(mix), `seed ${seed}`);
+    assert.deepEqual(Sim.clumpiness(rec.frames, 0, rec.n, labels, rec), clump, `seed ${seed}`);
   }
+});
+
+test('seed search skips seeds above the clumpiness limit', async () => {
+  const base = { n: 120, radius: 6, speed: 300, width: 960, height: 540 };
+  const opts = { sortTime: 4, fps: 60 };
+  const seen = [];
+  await Sim.findBestSeed(base, [3, 4, 5, 6, 7, 8], {
+    ...opts,
+    onSeed: (done, total, seed, stats) => seen.push({ seed, ...stats }),
+  });
+  const limit = [...seen].sort((a, b) => a.clump.worst - b.clump.worst)[2].clump.worst;
+  const allowed = seen.filter((r) => r.clump.worst <= limit);
+  const want = allowed.reduce((a, b) => (Math.abs(b.mix - 0.5) < Math.abs(a.mix - 0.5) ? b : a));
+  const best = await Sim.findBestSeed(base, [3, 4, 5, 6, 7, 8], { ...opts, maxClump: limit });
+  assert.equal(best.seed, want.seed);
+  assert.equal(await Sim.findBestSeed(base, [3, 4], { ...opts, maxClump: -1 }), null);
+});
+
+test('clumpiness tells a random mix from colours grouped on one side', () => {
+  const s = Sim.createInitialState({ n: 200, radius: 6, speed: 300, seed: 1, width: 960, height: 540 });
+  const frames = new Float32Array(s.n * 2);
+  for (let i = 0; i < s.n; i++) {
+    frames[2 * i] = s.x[i];
+    frames[2 * i + 1] = s.y[i];
+  }
+  // Blue on the left of each cluster, red on the right.
+  const order = (from, to) => Array.from({ length: to - from }, (_, k) => from + k).sort((a, b) => s.x[a] - s.x[b]);
+  const sided = new Uint8Array(s.n);
+  for (const [from, to] of [[0, 100], [100, 200]]) {
+    order(from, to).forEach((i, rank) => {
+      sided[i] = rank < 50 ? Sim.BLUE : Sim.RED;
+    });
+  }
+  assert.ok(Sim.clumpiness(frames, 0, s.n, sided, s).worst > 0.8);
+
+  // Random colours average close to 0.5.
+  const rand = Sim.mulberry32(9);
+  let total = 0;
+  for (let k = 0; k < 50; k++) {
+    const labels = Uint8Array.from({ length: s.n }, () => (rand() < 0.5 ? Sim.BLUE : Sim.RED));
+    const c = Sim.clumpiness(frames, 0, s.n, labels, s);
+    total += (c.topLeft + c.bottomRight) / 2;
+  }
+  assert.ok(Math.abs(total / 50 - 0.5) < 0.02, `random mix scored ${total / 50}`);
+
+  assert.equal(Sim.clumpiness(frames, 0, s.n, sided, { ...s, start: 'random' }), null);
 });

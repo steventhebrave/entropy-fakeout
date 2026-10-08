@@ -280,10 +280,13 @@
 
         <fieldset class="spaced">
           <legend class="eyebrow">Seed search <span class="note">· uses the settings above</span></legend>
-          <p class="help">Simulates each seed up to the sort time and keeps the one whose opening frame is closest to 50% sorted, which is perfectly mixed. Your current seed is always one of the candidates.</p>
+          <p class="help">Simulates each seed up to the sort time. Of the seeds within the clumpiness limit, it keeps the one whose opening frame is closest to 50% sorted, which is perfectly mixed. Your current seed is always one of the candidates.</p>
+          <p class="help">Clumpiness is the share of touching neighbours in a corner cluster that have the same colour, taking the worse corner. A random mix scores about 50%; colours sitting in patches or on one side score higher. Leave the limit empty for no limit.</p>
           <div class="search-row">
             <label class="field" for="tries"><span>Seeds to try</span>
               <input id="tries" type="number" min="2" step="1" value="20" inputmode="numeric"></label>
+            <label class="field" for="max-clump"><span>Max clumpiness, %</span>
+              <input id="max-clump" type="number" min="0" max="100" step="0.5" value="52" inputmode="decimal"></label>
             <button id="search" type="button">Find best seed</button>
           </div>
           <div class="status" id="search-status" aria-live="polite"></div>

@@ -54,11 +54,20 @@ all other settings unchanged, and keeps the one whose opening frame is
 closest to 50% sorted. It stops early if a seed scores exactly 50%, since
 nothing can beat that.
 
+An even split overall can still hide clumps: the blue particles in a corner
+cluster might sit on one side of it. With the corner start you can set a
+maximum **clumpiness**, the share of touching neighbours in a cluster that
+have the same colour (taking the worse of the two corners). A random mix
+scores about 50%; colours in patches or on one side score higher. With the
+default settings about half of all seeds score 52% or less, which is the
+default limit. The search only considers seeds within the limit, and the
+status under the settings shows the clumpiness of the current run.
+
 Seeds run in parallel, one Web Worker per CPU core, each running the same
 `sim.js` as the player. Each try only simulates up to the sort time, but it
 steps frame by frame exactly as the full run does, so the full run
 reproduces the mix it measured. From code: `Sim.findBestSeed(settings,
-seeds, { sortTime, fps, split })` (one core).
+seeds, { sortTime, fps, split, maxClump })` (one core).
 
 Why not Python or another language: the gas is chaotic, so a seed only
 reproduces if the search and the player perform exactly the same
