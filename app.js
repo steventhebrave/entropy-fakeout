@@ -501,13 +501,12 @@
       return;
     }
     const settings = physicsSettings();
-    const tries = Math.round(num(el.tries, 20, 2, 1000));
+    const tries = Math.round(num(el.tries, 20, 2, Infinity));
     el.tries.value = tries;
-    const seeds = [settings.seed];
-    while (seeds.length < tries) {
-      const seed = randomSeed();
-      if (!seeds.includes(seed)) seeds.push(seed);
-    }
+    // Drawn from the full 32-bit seed range so long searches don't run out of new seeds.
+    const unique = new Set([settings.seed]);
+    while (unique.size < tries) unique.add(Math.floor(Math.random() * 4294967296));
+    const seeds = [...unique];
 
     state.stopSearch = false;
     setSearching(true);
