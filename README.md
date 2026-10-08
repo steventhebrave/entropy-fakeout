@@ -6,6 +6,10 @@ right at a chosen moment.
 
 Open `index.html` in a browser. Nothing to install or build.
 
+Keyboard: **Space** plays or pauses, **N** picks a new random seed and runs
+it, and the arrow keys step through frames when the timeline has focus
+(hold Shift for 1 s steps).
+
 ## How it works
 
 1. **Simulate without colour.** Half the particles start packed into the

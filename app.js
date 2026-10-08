@@ -49,6 +49,7 @@
     run: 0, // increments per simulation so a stale run can be abandoned
     ranWith: null, // physics settings of the current recording
     statsText: '',
+    resumeAfterRun: false, // set by the N shortcut so playback carries on
     colours: {},
   };
 
@@ -404,6 +405,7 @@
     state.playTime = 0;
     state.frame = 0;
     relabel();
+    return true;
   }
 
   // ---------- events ----------
@@ -466,10 +468,22 @@
     }
   });
 
+  // Space: play/pause. N: new random seed and run it straight away.
   document.addEventListener('keydown', (e) => {
-    if (e.key !== ' ' || e.target.closest('input, select, button, textarea')) return;
-    e.preventDefault();
-    setPlaying(!state.playing);
+    if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest('input, select, textarea')) return;
+    if (e.key === ' ' && !e.target.closest('button')) {
+      e.preventDefault();
+      setPlaying(!state.playing);
+    } else if (e.key === 'n' || e.key === 'N') {
+      e.preventDefault();
+      state.resumeAfterRun = state.resumeAfterRun || state.playing;
+      el.reseed.click();
+      runSimulation().then((done) => {
+        if (!done) return;
+        if (state.resumeAfterRun) setPlaying(true);
+        state.resumeAfterRun = false;
+      });
+    }
   });
 
   // Theme changes: re-read the colour tokens.

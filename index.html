@@ -214,7 +214,7 @@
   <div>
     <div class="timeline-head">
       <span class="eyebrow">Sortedness vs time, s</span>
-      <span class="hint">Share of particles on their own colour's side. 50% is fully mixed. Drag to scrub.</span>
+      <span class="hint">Share of particles on their own colour's side. 50% is fully mixed. Drag to scrub. Keys: Space plays, N runs a new seed.</span>
     </div>
     <canvas id="timeline" tabindex="0" role="slider" aria-label="Playback position" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"></canvas>
   </div>
@@ -245,7 +245,7 @@
               <label for="seed">Random seed</label>
               <div class="seed-row">
                 <input id="seed" type="number" min="0" max="4294967295" step="1" value="1" inputmode="numeric">
-                <button id="reseed" type="button" title="Pick a random seed">New</button>
+                <button id="reseed" type="button" title="Pick a random seed. Press N to pick one and run it." aria-keyshortcuts="N">New</button>
               </div>
             </div>
           </div>
