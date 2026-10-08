@@ -91,21 +91,9 @@
     }
   }
 
-  /*
-   * Random non-overlapping positions and 2D Maxwell-Boltzmann velocities,
-   * with zero net momentum and the requested RMS speed.
-   */
-  function createInitialState(opts) {
-    const { n, radius, width, height, speed, seed } = opts;
-    if (!(n > 0)) throw new Error('Particle count must be at least 1.');
-    if (2 * radius >= Math.min(width, height)) throw new Error('Particles are too big for the box.');
-    const rand = mulberry32(seed);
-    const x = new Float64Array(n);
-    const y = new Float64Array(n);
-    const vx = new Float64Array(n);
-    const vy = new Float64Array(n);
-
-    // Random sequential placement, using a grid so each check is local.
+  // Random sequential placement anywhere in the box, using a grid so each
+  // overlap check only looks at nearby particles.
+  function placeRandom(n, radius, width, height, rand, x, y) {
     const minDist2 = 4 * radius * radius;
     const cell = 2 * radius;
     const cols = Math.max(1, Math.floor(width / cell));
@@ -150,6 +138,78 @@
         );
       }
     }
+  }
+
+  /*
+   * Half the particles packed into the top-left corner and half into the
+   * bottom-right. Each cluster is a hexagonal lattice cut to a quarter disc
+   * around its corner, so its size follows from the particle count and
+   * radius. Neighbouring particles, and the particles and the walls, are
+   * separated by gap × diameter.
+   */
+  function placeCorners(n, radius, width, height, gap, x, y) {
+    const pitch = 2 * radius * (1 + gap); // centre-to-centre distance
+    const rowStep = (pitch * Math.sqrt(3)) / 2;
+    const margin = radius * (1 + 2 * gap); // wall to first centre
+    const topLeft = Math.ceil(n / 2);
+
+    const sites = [];
+    for (let row = 0; margin + row * rowStep <= height - margin; row++) {
+      const sy = margin + row * rowStep;
+      for (let sx = margin + (row % 2) * (pitch / 2); sx <= width - margin; sx += pitch) {
+        sites.push([sx, sy, sx * sx + sy * sy]);
+      }
+    }
+    sites.sort((a, b) => a[2] - b[2]);
+
+    const tooCrowded = new Error(
+      `${n} particles of radius ${radius} do not fit in two corner clusters. ` +
+        'Use fewer or smaller particles, or start them spread out.'
+    );
+    if (sites.length < topLeft) throw tooCrowded;
+
+    for (let i = 0; i < topLeft; i++) {
+      x[i] = sites[i][0];
+      y[i] = sites[i][1];
+    }
+    // The bottom-right cluster is the top-left one rotated half a turn.
+    for (let i = topLeft; i < n; i++) {
+      x[i] = width - sites[i - topLeft][0];
+      y[i] = height - sites[i - topLeft][1];
+    }
+
+    // The two clusters must not meet in the middle.
+    const minDist2 = pitch * pitch * (1 - 1e-9);
+    for (let i = 0; i < topLeft; i++) {
+      for (let j = topLeft; j < n; j++) {
+        const dx = x[j] - x[i];
+        const dy = y[j] - y[i];
+        if (dx * dx + dy * dy < minDist2) throw tooCrowded;
+      }
+    }
+  }
+
+  /*
+   * Starting positions plus 2D Maxwell-Boltzmann velocities with zero net
+   * momentum and the requested RMS speed.
+   *
+   * start: 'corners' (default) two packed clusters in opposite corners
+   *        'random'  spread out at random over the whole box
+   * gap:   for 'corners', the space between neighbouring particles as a
+   *        fraction of their diameter (default 0.25)
+   */
+  function createInitialState(opts) {
+    const { n, radius, width, height, speed, seed, start = 'corners', gap = 0.25 } = opts;
+    if (!(n > 0)) throw new Error('Particle count must be at least 1.');
+    if (2 * radius >= Math.min(width, height)) throw new Error('Particles are too big for the box.');
+    const rand = mulberry32(seed);
+    const x = new Float64Array(n);
+    const y = new Float64Array(n);
+    const vx = new Float64Array(n);
+    const vy = new Float64Array(n);
+
+    if (start === 'random') placeRandom(n, radius, width, height, rand, x, y);
+    else placeCorners(n, radius, width, height, gap, x, y);
 
     let mx = 0;
     let my = 0;

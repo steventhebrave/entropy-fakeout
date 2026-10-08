@@ -90,6 +90,30 @@ test('recording conserves energy and never overlaps or leaves the box', async ()
   }
 });
 
+test('corner start packs half the particles into each opposite corner with even gaps', () => {
+  for (const [n, radius, gap] of [[200, 6, 0.25], [61, 9, 0.1], [1000, 4, 0.25]]) {
+    const s = makeState({ n, radius, gap });
+    const pitch = 2 * radius * (1 + gap);
+    const margin = radius * (1 + 2 * gap);
+    const topLeft = Math.ceil(n / 2);
+    for (let i = 0; i < n; i++) {
+      const inTopLeft = s.x[i] < s.width / 2 && s.y[i] < s.height / 2;
+      const inBottomRight = s.x[i] > s.width / 2 && s.y[i] > s.height / 2;
+      assert.ok(i < topLeft ? inTopLeft : inBottomRight, `particle ${i} is in the wrong corner`);
+      assert.ok(s.x[i] >= margin - 1e-9 && s.x[i] <= s.width - margin + 1e-9);
+      assert.ok(s.y[i] >= margin - 1e-9 && s.y[i] <= s.height - margin + 1e-9);
+      for (let j = i + 1; j < n; j++) {
+        const d = Math.hypot(s.x[i] - s.x[j], s.y[i] - s.y[j]);
+        assert.ok(d >= pitch - 1e-9, `particles ${i} and ${j} are ${d} apart, want ${pitch}`);
+      }
+    }
+  }
+});
+
+test('corner start refuses clusters that would meet in the middle', () => {
+  assert.throws(() => makeState({ n: 1000, radius: 14 }), /do not fit in two corner clusters/);
+});
+
 test('the same seed gives bit-identical trajectories', async () => {
   const a = await Sim.record(makeState({ seed: 7 }), { duration: 5, fps: 60 });
   const b = await Sim.record(makeState({ seed: 7 }), { duration: 5, fps: 60 });
@@ -98,7 +122,7 @@ test('the same seed gives bit-identical trajectories', async () => {
 
 for (const split of ['even', 'centre']) {
   test(`'${split}' labels sort the gas exactly at the sort time and not at the ends`, async () => {
-    const rec = await Sim.record(makeState(), { duration: 30, fps: 60 });
+    const rec = await Sim.record(makeState({ start: 'random' }), { duration: 30, fps: 60 });
     const { labels, frame, time, boundary } = Sim.assignColours(rec, 15, split);
     assert.equal(frame, 900);
     assert.equal(time, 15);

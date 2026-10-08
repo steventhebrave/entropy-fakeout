@@ -8,8 +8,9 @@ Open `index.html` in a browser. Nothing to install or build.
 
 ## How it works
 
-1. **Simulate without colour.** `sim.js` runs an event-driven hard-disk
-   simulation. Each collision with another disk or a wall is elastic and is
+1. **Simulate without colour.** Half the particles start packed into the
+   top-left corner and half into the bottom-right (or, optionally, spread out
+   at random). `sim.js` runs an event-driven hard-disk simulation. Each collision with another disk or a wall is elastic and is
    resolved at the exact moment it happens, with no time step. Particles
    never overlap and kinetic energy is conserved to rounding error (about
    1e-16 relative drift). Every frame (60 fps) is recorded.
@@ -28,6 +29,18 @@ replaying it guarantees that. It also makes scrubbing and changing the sort
 time instant, because relabelling does not need a new simulation.
 
 The same seed gives the same trajectories every time.
+
+### Corner start
+
+Each cluster is a hexagonal lattice cut to a quarter disc around its corner,
+so its size follows from the particle count and radius. Neighbouring
+particles, and the outer particles and the walls, are separated by a gap
+set as a percentage of the particle diameter (default 25%). If the two
+clusters would meet in the middle, you get an error asking for fewer or
+smaller particles.
+
+Because colours come from positions at the sort time, each corner cluster
+starts as a mix of blue and red.
 
 ### Dividing line
 
@@ -62,6 +75,8 @@ const Sim = require('./sim.js');
 
 const initial = Sim.createInitialState({
   n: 200, radius: 6, speed: 300, seed: 1, width: 960, height: 540,
+  start: 'corners', // or 'random'
+  gap: 0.25, // corner clusters: gap between particles as a fraction of diameter
 });
 const rec = await Sim.record(initial, { duration: 30, fps: 60 });
 const { labels } = Sim.assignColours(rec, 15); // 0 = blue, 1 = red

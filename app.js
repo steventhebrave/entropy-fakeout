@@ -24,6 +24,8 @@
     run: $('run'),
     pending: $('pending'),
     status: $('status'),
+    start: $('start'),
+    gap: $('gap'),
     n: $('n'),
     radius: $('radius'),
     speed: $('speed'),
@@ -62,6 +64,8 @@
     let n = Math.round(num(el.n, 200, 2, 1000));
     if (n % 2) n -= 1;
     return {
+      start: el.start.value,
+      gap: num(el.gap, 25, 0, 200) / 100,
       n,
       radius: num(el.radius, 6, 1, 40),
       speed: num(el.speed, 300, 10, 2000),
@@ -408,9 +412,17 @@
     e.preventDefault();
     runSimulation();
   });
-  for (const input of [el.n, el.radius, el.speed, el.duration, el.seed]) {
+  for (const input of [el.gap, el.n, el.radius, el.speed, el.duration, el.seed]) {
     input.addEventListener('input', updatePending);
   }
+  const syncStart = () => {
+    el.gap.disabled = el.start.value !== 'corners';
+  };
+  el.start.addEventListener('change', () => {
+    syncStart();
+    updatePending();
+  });
+  syncStart();
   el.reseed.addEventListener('click', () => {
     el.seed.value = String(Math.floor(Math.random() * 1e6));
     updatePending();
