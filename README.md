@@ -46,6 +46,19 @@ smaller particles.
 Because colours come from positions at the sort time, each corner cluster
 starts as a mix of blue and red.
 
+### Finding a well-mixed seed
+
+Some seeds start out looking more sorted than others. The seed search in
+the page tries a number of seeds (your current one plus random others) with
+all other settings unchanged, and keeps the one whose opening frame is
+closest to 50% sorted. Each try only simulates up to the sort time, but it
+steps frame by frame exactly as the full run does, so the full run
+reproduces the mix it measured. From code: `Sim.findBestSeed(settings,
+seeds, { sortTime, fps, split })`.
+
+Settings are saved in the browser's local storage and restored on the next
+visit. "Reset to defaults" restores the original values.
+
 ### Dividing line
 
 - **Half each** (default): the leftmost half of the particles at the sort

@@ -452,18 +452,54 @@
   // Fraction of particles on "their" side of the dividing line: blue left,
   // red right. About 0.5 when mixed, exactly 1 at the sort time.
   function sortedness(rec, labels, boundary) {
-    const { n, frames, frameCount } = rec;
-    const out = new Float32Array(frameCount);
-    for (let f = 0; f < frameCount; f++) {
-      const base = f * n * 2;
-      let good = 0;
-      for (let i = 0; i < n; i++) {
-        const left = frames[base + 2 * i] < boundary;
-        if (left === (labels[i] === BLUE)) good++;
-      }
-      out[f] = good / n;
-    }
+    const out = new Float32Array(rec.frameCount);
+    for (let f = 0; f < rec.frameCount; f++) out[f] = sortednessAt(rec, labels, boundary, f);
     return out;
+  }
+
+  function sortednessAt(rec, labels, boundary, f) {
+    const { n, frames } = rec;
+    const base = f * n * 2;
+    let good = 0;
+    for (let i = 0; i < n; i++) {
+      const left = frames[base + 2 * i] < boundary;
+      if (left === (labels[i] === BLUE)) good++;
+    }
+    return good / n;
+  }
+
+  /*
+   * How sorted the opening frame looks once the particles are labelled at
+   * the sort time. 0.5 is perfectly mixed.
+   *
+   * Only simulates up to the sort time, but steps frame by frame exactly as
+   * a full recording does. Rounding differs if you step any other way, and
+   * in a chaotic gas that would lead to a different trajectory, so this is
+   * what guarantees the answer matches the full run.
+   */
+  async function openingMix(state, opts) {
+    const { sortTime, fps, split = 'even', onProgress } = opts;
+    const sortFrame = Math.max(0, Math.round(sortTime * fps));
+    const rec = await record(state, { duration: sortFrame / fps, fps, onProgress });
+    const { labels, boundary } = assignColours(rec, sortTime, split);
+    return sortednessAt(rec, labels, boundary, 0);
+  }
+
+  /*
+   * Try each seed with otherwise identical settings and return the one whose
+   * opening frame is closest to perfectly mixed: { seed, mix }. Ties go to
+   * the earlier seed. opts are as for openingMix, plus onSeed(done, total,
+   * seed, mix), which may return a promise.
+   */
+  async function findBestSeed(base, seeds, opts) {
+    let best = null;
+    for (let k = 0; k < seeds.length; k++) {
+      const seed = seeds[k];
+      const mix = await openingMix(createInitialState({ ...base, seed }), opts);
+      if (!best || Math.abs(mix - 0.5) < Math.abs(best.mix - 0.5)) best = { seed, mix };
+      if (opts.onSeed) await opts.onSeed(k + 1, seeds.length, seed, mix);
+    }
+    return best;
   }
 
   return {
@@ -475,5 +511,7 @@
     record,
     assignColours,
     sortedness,
+    openingMix,
+    findBestSeed,
   };
 });

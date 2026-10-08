@@ -148,6 +148,12 @@
   .seed-row button { min-height: 36px; padding: 0 10px; font-weight: 500; }
   .checks { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 12px; }
 
+  fieldset.spaced { margin-top: 22px; }
+  .help { margin: 0 0 10px; font-size: 13px; color: var(--muted); max-width: 60ch; }
+  .search-row { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 14px; }
+  .search-row .field { width: 9rem; }
+  .reset-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 14px; font-size: 13px; color: var(--muted); }
+  button.quiet { min-height: 30px; padding: 0 10px; font-weight: 500; font-size: 13px; background: transparent; }
   .run-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
   #pending { font-size: 13px; color: var(--muted); }
   .status { margin-top: 12px; font-family: var(--font-data); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -223,7 +229,7 @@
     <section aria-labelledby="settings-title">
       <h2 id="settings-title">Settings</h2>
       <form id="settings" novalidate>
-        <fieldset>
+        <fieldset id="sim-fields">
           <legend class="eyebrow">Simulation <span class="note">· applies when you run the simulation</span></legend>
           <div class="fields">
             <label class="field wide" for="start"><span>Start</span>
@@ -255,7 +261,7 @@
           <span id="pending" hidden>Run the simulation to apply these changes.</span>
         </div>
 
-        <fieldset style="margin-top: 22px">
+        <fieldset id="label-fields" class="spaced">
           <legend class="eyebrow">Labels <span class="note">· apply instantly</span></legend>
           <div class="fields">
             <label class="field" for="sort-time"><span>Sort time, s</span>
@@ -271,8 +277,23 @@
             <label class="check" for="show-line"><input id="show-line" type="checkbox"> Show dividing line</label>
           </div>
         </fieldset>
+
+        <fieldset class="spaced">
+          <legend class="eyebrow">Seed search <span class="note">· uses the settings above</span></legend>
+          <p class="help">Simulates each seed up to the sort time and keeps the one whose opening frame is closest to 50% sorted, which is perfectly mixed. Your current seed is always one of the candidates.</p>
+          <div class="search-row">
+            <label class="field" for="tries"><span>Seeds to try</span>
+              <input id="tries" type="number" min="2" max="1000" step="1" value="20" inputmode="numeric"></label>
+            <button id="search" type="button">Find best seed</button>
+          </div>
+          <div class="status" id="search-status" aria-live="polite"></div>
+        </fieldset>
       </form>
       <div class="status" id="status" aria-live="polite"></div>
+      <div class="reset-row">
+        <span>Settings are saved in this browser.</span>
+        <button id="reset" type="button" class="quiet">Reset to defaults</button>
+      </div>
     </section>
 
     <section class="notes" aria-labelledby="how-title">

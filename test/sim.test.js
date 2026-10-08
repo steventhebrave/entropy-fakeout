@@ -144,3 +144,23 @@ for (const split of ['even', 'centre']) {
     assert.ok(order[rec.frameCount - 1] < 0.6, `end still looks sorted: ${order[rec.frameCount - 1]}`);
   });
 }
+
+test('seed search reports the opening mix that the full run shows', async () => {
+  const base = { n: 120, radius: 6, speed: 300, width: 960, height: 540 };
+  const opts = { sortTime: 4.01, fps: 60, split: 'even' };
+  const seen = [];
+  const best = await Sim.findBestSeed(base, [3, 4, 5, 6], {
+    ...opts,
+    onSeed: (done, total, seed, mix) => seen.push({ seed, mix }),
+  });
+  assert.equal(seen.length, 4);
+  const closest = Math.min(...seen.map((r) => Math.abs(r.mix - 0.5)));
+  assert.equal(Math.abs(best.mix - 0.5), closest);
+
+  // A full-length recording of each seed agrees with what the search saw.
+  for (const { seed, mix } of seen) {
+    const rec = await Sim.record(Sim.createInitialState({ ...base, seed }), { duration: 6, fps: 60 });
+    const { labels, boundary } = Sim.assignColours(rec, opts.sortTime, opts.split);
+    assert.equal(Sim.sortedness(rec, labels, boundary)[0], Math.fround(mix), `seed ${seed}`);
+  }
+});

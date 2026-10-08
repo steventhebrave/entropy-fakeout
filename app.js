@@ -36,6 +36,12 @@
     split: $('split'),
     colour: $('colour'),
     showLine: $('show-line'),
+    simFields: $('sim-fields'),
+    labelFields: $('label-fields'),
+    tries: $('tries'),
+    search: $('search'),
+    searchStatus: $('search-status'),
+    reset: $('reset'),
   };
 
   const state = {
@@ -49,7 +55,9 @@
     run: 0, // increments per simulation so a stale run can be abandoned
     ranWith: null, // physics settings of the current recording
     statsText: '',
-    resumeAfterRun: false, // set by the N shortcut so playback carries on
+    resumeAfterRun: false, // carry on playing after a rerun
+    searching: false,
+    stopSearch: false,
     colours: {},
   };
 
@@ -73,6 +81,57 @@
       duration: num(el.duration, 30, 1, 120),
       seed: Math.round(num(el.seed, 1, 0, 4294967295)),
     };
+  }
+
+  // Remembered in this browser between visits.
+  const STORAGE_KEY = 'entropy-fakeout:settings';
+  const SAVED = ['start', 'gap', 'n', 'radius', 'speed', 'duration', 'seed', 'sort-time',
+    'split', 'colour', 'show-line', 'loop', 'rate', 'tries'];
+
+  function saveSettings() {
+    const data = {};
+    for (const id of SAVED) {
+      const input = $(id);
+      data[id] = input.type === 'checkbox' ? input.checked : input.value;
+    }
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch (_) {
+      // Storage is unavailable (private window, blocked site data): nothing to keep.
+    }
+  }
+
+  function loadSettings() {
+    let data = null;
+    try {
+      data = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    } catch (_) {
+      return;
+    }
+    if (!data || typeof data !== 'object') return;
+    for (const id of SAVED) {
+      if (!(id in data)) continue;
+      const input = $(id);
+      const value = data[id];
+      if (input.type === 'checkbox') input.checked = value === true;
+      else if (input.tagName === 'SELECT') {
+        if ([...input.options].some((o) => o.value === value)) input.value = value;
+      } else if (typeof value === 'string') input.value = value;
+    }
+  }
+
+  // Back to the page's built-in values. The rerun saves them over the old ones.
+  function resetSettings() {
+    for (const id of SAVED) {
+      const input = $(id);
+      if (input.type === 'checkbox') input.checked = input.defaultChecked;
+      else if (input.tagName === 'SELECT') {
+        input.value = ([...input.options].find((o) => o.defaultSelected) || input.options[0]).value;
+      } else input.value = input.defaultValue;
+    }
+    el.searchStatus.textContent = '';
+    syncStart();
+    rerun();
   }
 
   function updatePending() {
@@ -356,6 +415,7 @@
     const run = ++state.run;
     const settings = physicsSettings();
     el.n.value = settings.n;
+    saveSettings();
     setPlaying(false);
     el.run.disabled = true;
     el.run.textContent = 'Simulating…';
@@ -399,13 +459,97 @@
       `computed in ${seconds.toFixed(1)} s · energy drift ${drift.toExponential(0)}`;
     el.timeline.setAttribute('aria-valuemax', String(rec.frameCount - 1));
     el.sortTime.max = String(settings.duration);
-    el.run.disabled = false;
+    el.run.disabled = state.searching;
     el.run.textContent = 'Run simulation';
     updatePending();
     state.playTime = 0;
     state.frame = 0;
     relabel();
     return true;
+  }
+
+  // Run the simulation, then carry on playing if it was playing before.
+  function rerun() {
+    state.resumeAfterRun = state.resumeAfterRun || state.playing;
+    return runSimulation().then((done) => {
+      if (!done) return;
+      if (state.resumeAfterRun) setPlaying(true);
+      state.resumeAfterRun = false;
+    });
+  }
+
+  // ---------- seed search ----------
+
+  class Stopped extends Error {}
+  const pct = (v) => `${(v * 100).toFixed(1)}%`;
+  const randomSeed = () => Math.floor(Math.random() * 1e6);
+  const distance = (r) => Math.abs(r.mix - 0.5);
+
+  function setSearching(on) {
+    state.searching = on;
+    el.search.textContent = on ? 'Stop' : 'Find best seed';
+    el.simFields.disabled = on;
+    el.labelFields.disabled = on;
+    el.tries.disabled = on;
+    el.run.disabled = on;
+    el.reset.disabled = on;
+  }
+
+  async function searchSeeds() {
+    if (state.searching) {
+      state.stopSearch = true; // the search notices at its next progress check
+      return;
+    }
+    const settings = physicsSettings();
+    const tries = Math.round(num(el.tries, 20, 2, 1000));
+    el.tries.value = tries;
+    const seeds = [settings.seed];
+    while (seeds.length < tries) {
+      const seed = randomSeed();
+      if (!seeds.includes(seed)) seeds.push(seed);
+    }
+
+    state.stopSearch = false;
+    setSearching(true);
+    const report = (text) => {
+      el.searchStatus.textContent = text;
+    };
+    report(`Trying seed 1 of ${seeds.length}…`);
+    let best = null;
+    let worst = null;
+    let tried = 0;
+    let error = null;
+    try {
+      await Sim.findBestSeed({ ...settings, ...BOX }, seeds, {
+        sortTime: num(el.sortTime, 15, 0, settings.duration),
+        fps: FPS,
+        split: el.split.value,
+        onProgress: () => {
+          if (state.stopSearch) throw new Stopped();
+          return new Promise((resolve) => setTimeout(resolve, 0));
+        },
+        onSeed: (done, total, seed, mix) => {
+          tried = done;
+          if (!best || Math.abs(mix - 0.5) < distance(best)) best = { seed, mix };
+          if (!worst || Math.abs(mix - 0.5) > distance(worst)) worst = { seed, mix };
+          report(`Tried ${done} of ${total} · best so far: seed ${best.seed}, opening frame ${pct(best.mix)} sorted`);
+        },
+      });
+    } catch (err) {
+      if (!(err instanceof Stopped)) error = err;
+    }
+    setSearching(false);
+
+    if (error) return report(error.message);
+    if (!best) return report('Search stopped before any seed finished.');
+    const scope = tried < seeds.length ? `Stopped after ${tried} of ${seeds.length} seeds` : `Best of ${tried} seeds`;
+    report(
+      `${scope}: seed ${best.seed}, opening frame ${pct(best.mix)} sorted. ` +
+        `The furthest from mixed was ${pct(worst.mix)}.`
+    );
+    el.seed.value = String(best.seed);
+    saveSettings();
+    rerun();
   }
 
   // ---------- events ----------
@@ -426,9 +570,17 @@
   });
   syncStart();
   el.reseed.addEventListener('click', () => {
-    el.seed.value = String(Math.floor(Math.random() * 1e6));
+    el.seed.value = String(randomSeed());
+    saveSettings();
     updatePending();
   });
+  el.search.addEventListener('click', searchSeeds);
+  el.reset.addEventListener('click', resetSettings);
+  for (const type of ['input', 'change']) {
+    document.addEventListener(type, (e) => {
+      if (SAVED.includes(e.target.id)) saveSettings();
+    });
+  }
   el.sortTime.addEventListener('input', relabel);
   el.split.addEventListener('change', relabel);
   el.colour.addEventListener('change', render);
@@ -474,15 +626,10 @@
     if (e.key === ' ' && !e.target.closest('button')) {
       e.preventDefault();
       setPlaying(!state.playing);
-    } else if (e.key === 'n' || e.key === 'N') {
+    } else if ((e.key === 'n' || e.key === 'N') && !state.searching) {
       e.preventDefault();
-      state.resumeAfterRun = state.resumeAfterRun || state.playing;
       el.reseed.click();
-      runSimulation().then((done) => {
-        if (!done) return;
-        if (state.resumeAfterRun) setPlaying(true);
-        state.resumeAfterRun = false;
-      });
+      rerun();
     }
   });
 
@@ -501,6 +648,8 @@
 
   // ---------- start ----------
 
+  loadSettings();
+  syncStart();
   readColours();
   render();
   runSimulation().then(() => {
