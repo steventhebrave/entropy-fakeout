@@ -14,8 +14,12 @@
  * Works both in the browser (window.EntropySim) and in Node (require).
  */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.EntropySim = factory();
+  const api = factory();
+  // The module's own source, so a page can run it in Web Workers. Workers
+  // can't load scripts from a file:// page, but they can from a blob.
+  api.source = `(${factory.toString()})()`;
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  else root.EntropySim = api;
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
@@ -262,23 +266,6 @@
       for (let i = 0; i < this.n; i++) this.predict(i);
     }
 
-    // Time until disks i and j touch, or Infinity if they never will.
-    pairTime(i, j) {
-      const dx = this.x[j] - this.x[i];
-      const dy = this.y[j] - this.y[i];
-      const dvx = this.vx[j] - this.vx[i];
-      const dvy = this.vy[j] - this.vy[i];
-      const dvdr = dx * dvx + dy * dvy;
-      if (dvdr >= 0) return Infinity;
-      const dvdv = dvx * dvx + dvy * dvy;
-      const gap = dx * dx + dy * dy - 4 * this.r * this.r;
-      const d = dvdr * dvdr - dvdv * gap;
-      if (d < 0) return Infinity;
-      // Algebraically equal to -(dvdr + sqrt(d)) / dvdv, but without the
-      // cancellation error that form has for near-grazing collisions.
-      return gap / (-dvdr + Math.sqrt(d));
-    }
-
     predict(i) {
       const { x, y, vx, vy, r } = this;
       let best = Infinity;
@@ -295,9 +282,33 @@
         partner = WALL_Y;
       }
 
+      // Time until disks i and j touch. This is the root of
+      // |dr + dv t| = 2r, written as gap / (-dvdr + sqrt(d)), which equals
+      // -(dvdr + sqrt(d)) / dvdv without its cancellation error for
+      // near-grazing collisions.
+      const xi = x[i];
+      const yi = y[i];
+      const vxi = vx[i];
+      const vyi = vy[i];
+      const sigma2 = 4 * r * r;
       for (let j = 0; j < this.n; j++) {
         if (j === i) continue;
-        dt = this.pairTime(i, j);
+        const dx = x[j] - xi;
+        const dy = y[j] - yi;
+        const dvx = vx[j] - vxi;
+        const dvy = vy[j] - vyi;
+        const dvdr = dx * dvx + dy * dvy;
+        if (dvdr >= 0) continue; // moving apart
+        const gap = dx * dx + dy * dy - sigma2;
+        // The root is at least gap / (-2 dvdr). Skip pairs that cannot beat
+        // the best so far without the square root. The 1e-9 margin is far
+        // larger than any rounding, so this never skips a pair the full
+        // calculation would have chosen, and results are unchanged.
+        if (gap > best * (-2 * dvdr) * (1 + 1e-9)) continue;
+        const dvdv = dvx * dvx + dvy * dvy;
+        const d = dvdr * dvdr - dvdv * gap;
+        if (d < 0) continue; // they miss
+        dt = gap / (-dvdr + Math.sqrt(d));
         if (dt < best) {
           best = dt;
           partner = j;
@@ -428,7 +439,11 @@
   function assignColours(rec, sortTime, split = 'even') {
     const { n, frames, fps, frameCount, width } = rec;
     const frame = Math.max(0, Math.min(frameCount - 1, Math.round(sortTime * fps)));
-    const base = frame * n * 2;
+    const { labels, boundary } = labelFrame(frames, frame * n * 2, n, width, split);
+    return { labels, frame, time: frame / fps, split, boundary };
+  }
+
+  function labelFrame(frames, base, n, width, split) {
     const labels = new Uint8Array(n);
     let boundary = width / 2;
 
@@ -445,8 +460,7 @@
         boundary = (frames[base + 2 * order[blues - 1]] + frames[base + 2 * order[blues]]) / 2;
       }
     }
-
-    return { labels, frame, time: frame / fps, split, boundary };
+    return { labels, boundary };
   }
 
   // Fraction of particles on "their" side of the dividing line: blue left,
@@ -472,17 +486,31 @@
    * How sorted the opening frame looks once the particles are labelled at
    * the sort time. 0.5 is perfectly mixed.
    *
-   * Only simulates up to the sort time, but steps frame by frame exactly as
-   * a full recording does. Rounding differs if you step any other way, and
-   * in a chaotic gas that would lead to a different trajectory, so this is
-   * what guarantees the answer matches the full run.
+   * Only simulates up to the sort time and only keeps two frames, but steps
+   * frame by frame exactly as record() does. Rounding differs if you step
+   * any other way, and in a chaotic gas that would lead to a different
+   * trajectory, so this is what guarantees the answer matches the full run.
    */
   async function openingMix(state, opts) {
-    const { sortTime, fps, split = 'even', onProgress } = opts;
+    const { sortTime, fps, split = 'even', onProgress, chunk = 30 } = opts;
+    const n = state.n;
     const sortFrame = Math.max(0, Math.round(sortTime * fps));
-    const rec = await record(state, { duration: sortFrame / fps, fps, onProgress });
-    const { labels, boundary } = assignColours(rec, sortTime, split);
-    return sortednessAt(rec, labels, boundary, 0);
+    const sim = new Simulator(state);
+    const frames = new Float32Array(2 * n * 2); // the opening frame, then the sort frame
+    for (let f = 0; f <= sortFrame; f++) {
+      sim.advanceTo(f / fps);
+      for (const slot of [f === 0 ? 0 : -1, f === sortFrame ? 1 : -1]) {
+        if (slot < 0) continue;
+        const base = slot * n * 2;
+        for (let i = 0; i < n; i++) {
+          frames[base + 2 * i] = sim.x[i];
+          frames[base + 2 * i + 1] = sim.y[i];
+        }
+      }
+      if (onProgress && (f + 1) % chunk === 0) await onProgress(f + 1, sortFrame + 1);
+    }
+    const { labels, boundary } = labelFrame(frames, n * 2, n, state.width, split);
+    return sortednessAt({ n, frames }, labels, boundary, 0);
   }
 
   /*

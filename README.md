@@ -51,10 +51,20 @@ starts as a mix of blue and red.
 Some seeds start out looking more sorted than others. The seed search in
 the page tries a number of seeds (your current one plus random others) with
 all other settings unchanged, and keeps the one whose opening frame is
-closest to 50% sorted. Each try only simulates up to the sort time, but it
+closest to 50% sorted. It stops early if a seed scores exactly 50%, since
+nothing can beat that.
+
+Seeds run in parallel, one Web Worker per CPU core, each running the same
+`sim.js` as the player. Each try only simulates up to the sort time, but it
 steps frame by frame exactly as the full run does, so the full run
 reproduces the mix it measured. From code: `Sim.findBestSeed(settings,
-seeds, { sortTime, fps, split })`.
+seeds, { sortTime, fps, split })` (one core).
+
+Why not Python or another language: the gas is chaotic, so a seed only
+reproduces if the search and the player perform exactly the same
+floating-point operations. A port would have to match JavaScript bit for
+bit, including its `Math.log` and `Math.cos`. Running the player's own code
+on every core is both exact and faster.
 
 Settings are saved in the browser's local storage and restored on the next
 visit. "Reset to defaults" restores the original values.

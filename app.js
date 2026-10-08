@@ -58,6 +58,7 @@
     resumeAfterRun: false, // carry on playing after a rerun
     searching: false,
     stopSearch: false,
+    cancelSearch: null, // stops a running worker search at once
     colours: {},
   };
 
@@ -440,7 +441,7 @@
         onProgress: (done, total) => {
           if (run !== state.run) throw new Error('superseded');
           el.run.textContent = `Simulating… ${Math.floor((100 * done) / total)}%`;
-          return new Promise((resolve) => setTimeout(resolve, 0));
+          return breathe();
         },
       });
     } catch (err) {
@@ -468,6 +469,21 @@
     return true;
   }
 
+  // Let the page repaint and respond during a long calculation. Each pause
+  // costs at least 4 ms (the browser's minimum timer delay), so pause at
+  // most every 25 ms of work rather than every chunk.
+  let lastBreath = 0;
+  function breathe() {
+    const now = performance.now();
+    if (now - lastBreath < 25) return null;
+    return new Promise((resolve) =>
+      setTimeout(() => {
+        lastBreath = performance.now();
+        resolve();
+      }, 0)
+    );
+  }
+
   // Run the simulation, then carry on playing if it was playing before.
   function rerun() {
     state.resumeAfterRun = state.resumeAfterRun || state.playing;
@@ -479,11 +495,16 @@
   }
 
   // ---------- seed search ----------
+  //
+  // Seeds are independent, so they run in parallel on Web Workers, one per
+  // CPU core. Each worker runs this same sim.js, so its results match the
+  // player's exactly. If workers are unavailable it falls back to running
+  // seeds one at a time on the page.
 
-  class Stopped extends Error {}
   const pct = (v) => `${(v * 100).toFixed(1)}%`;
   const randomSeed = () => Math.floor(Math.random() * 1e6);
   const distance = (r) => Math.abs(r.mix - 0.5);
+  const fmt = (v) => v.toLocaleString();
 
   function setSearching(on) {
     state.searching = on;
@@ -495,57 +516,196 @@
     el.reset.disabled = on;
   }
 
+  let workerUrl = null;
+  function searchWorkerUrl() {
+    if (!workerUrl) {
+      const code = `
+        const Sim = ${Sim.source};
+        onmessage = async (e) => {
+          const { base, opts, index, seed } = e.data;
+          try {
+            const mix = await Sim.openingMix(Sim.createInitialState({ ...base, seed }), opts);
+            postMessage({ index, seed, mix });
+          } catch (err) {
+            postMessage({ index, seed, error: err.message });
+          }
+        };`;
+      workerUrl = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
+    }
+    return workerUrl;
+  }
+
+  // Hands seeds to workers one at a time until the search is over. Resolves
+  // when every worker is idle; rejects if the workers themselves fail.
+  function searchWithWorkers(job) {
+    return new Promise((resolve, reject) => {
+      const count = Math.max(1, Math.min(navigator.hardwareConcurrency || 4, job.tries));
+      const workers = [];
+      let busy = 0;
+      let finished = false;
+      const finish = (err) => {
+        if (finished) return;
+        finished = true;
+        state.cancelSearch = null;
+        workers.forEach((w) => w.terminate());
+        if (err) reject(err);
+        else resolve();
+      };
+      const feed = (w) => {
+        if (job.over()) {
+          if (busy === 0) finish();
+          return;
+        }
+        const index = job.handed++;
+        busy++;
+        w.postMessage({ base: job.base, opts: job.opts, index, seed: job.seedFor(index) });
+      };
+      // Stop: drop seeds in flight rather than wait for them.
+      state.cancelSearch = () => finish();
+      job.cores = count;
+      for (let k = 0; k < count; k++) {
+        const w = new Worker(searchWorkerUrl());
+        w.onmessage = (e) => {
+          busy--;
+          job.take(e.data);
+          feed(w);
+        };
+        w.onerror = (e) => {
+          e.preventDefault();
+          finish(new Error(e.message || 'A search worker failed to start.'));
+        };
+        workers.push(w);
+      }
+      workers.forEach(feed);
+    });
+  }
+
+  async function searchOnPage(job) {
+    job.cores = 1;
+    while (!job.over()) {
+      const index = job.handed++;
+      const seed = job.seedFor(index);
+      try {
+        const mix = await Sim.openingMix(Sim.createInitialState({ ...job.base, seed }), {
+          ...job.opts,
+          onProgress: () => (state.stopSearch ? Promise.reject(new Error('stopped')) : breathe()),
+        });
+        job.take({ index, seed, mix });
+      } catch (err) {
+        if (state.stopSearch) return;
+        job.take({ index, seed, error: err.message });
+      }
+    }
+  }
+
   async function searchSeeds() {
     if (state.searching) {
-      state.stopSearch = true; // the search notices at its next progress check
+      state.stopSearch = true;
+      if (state.cancelSearch) state.cancelSearch();
       return;
     }
     const settings = physicsSettings();
     const tries = Math.round(num(el.tries, 20, 2, Infinity));
     el.tries.value = tries;
-    // Drawn from the full 32-bit seed range so long searches don't run out of new seeds.
-    const unique = new Set([settings.seed]);
-    while (unique.size < tries) unique.add(Math.floor(Math.random() * 4294967296));
-    const seeds = [...unique];
-
-    state.stopSearch = false;
-    setSearching(true);
     const report = (text) => {
       el.searchStatus.textContent = text;
     };
-    report(`Trying seed 1 of ${seeds.length}…`);
-    let best = null;
-    let worst = null;
-    let tried = 0;
-    let error = null;
+
+    // Catch settings that can't be laid out before starting any workers.
     try {
-      await Sim.findBestSeed({ ...settings, ...BOX }, seeds, {
-        sortTime: num(el.sortTime, 15, 0, settings.duration),
+      Sim.createInitialState({ ...settings, ...BOX });
+    } catch (err) {
+      return report(err.message);
+    }
+
+    // The current seed goes first, so it wins any tie. The rest are random,
+    // unique, and drawn from the full 32-bit range so long searches don't
+    // run out.
+    const used = new Set([settings.seed]);
+    const job = {
+      base: { ...settings, ...BOX },
+      opts: {
+        sortTime: num(el.sortTime, 15, 0, Math.floor(settings.duration * FPS + 1e-9) / FPS),
         fps: FPS,
         split: el.split.value,
-        onProgress: () => {
-          if (state.stopSearch) throw new Stopped();
-          return new Promise((resolve) => setTimeout(resolve, 0));
-        },
-        onSeed: (done, total, seed, mix) => {
-          tried = done;
-          if (!best || Math.abs(mix - 0.5) < distance(best)) best = { seed, mix };
-          if (!worst || Math.abs(mix - 0.5) > distance(worst)) worst = { seed, mix };
-          report(`Tried ${done} of ${total} · best so far: seed ${best.seed}, opening frame ${pct(best.mix)} sorted`);
-        },
-      });
+      },
+      tries,
+      handed: 0,
+      done: 0,
+      best: null,
+      worst: null,
+      perfect: false,
+      error: null,
+      cores: 0,
+      seedFor(index) {
+        if (index === 0) return settings.seed;
+        let seed;
+        do seed = Math.floor(Math.random() * 4294967296);
+        while (used.has(seed));
+        used.add(seed);
+        return seed;
+      },
+      // Nothing can beat exactly 50%, so stop handing out seeds once one
+      // scores that. Seeds already running still finish, and the earliest
+      // perfect seed wins.
+      over() {
+        return this.handed >= this.tries || this.perfect || this.error || state.stopSearch;
+      },
+      take(result) {
+        if (result.error) {
+          this.error = this.error || result.error;
+          return;
+        }
+        this.done++;
+        const better = (a, b) => distance(a) < distance(b) || (distance(a) === distance(b) && a.index < b.index);
+        if (!this.best || better(result, this.best)) this.best = result;
+        if (!this.worst || distance(result) > distance(this.worst)) this.worst = result;
+        if (result.mix === 0.5) this.perfect = true;
+        progress();
+      },
+    };
+
+    const started = performance.now();
+    const rate = () => job.done / Math.max(0.001, (performance.now() - started) / 1000);
+    const cores = () => (job.cores === 1 ? '1 core' : `${job.cores} cores`);
+    let lastReport = 0;
+    const progress = () => {
+      const now = performance.now();
+      if (now - lastReport < 100) return;
+      lastReport = now;
+      report(
+        `Tried ${fmt(job.done)} of ${fmt(tries)} · ${rate().toFixed(0)} seeds/s on ${cores()} · ` +
+          `best so far: seed ${job.best.seed}, opening frame ${pct(job.best.mix)} sorted`
+      );
+    };
+
+    state.stopSearch = false;
+    setSearching(true);
+    report(`Starting ${fmt(tries)} seeds…`);
+    try {
+      await searchWithWorkers(job);
     } catch (err) {
-      if (!(err instanceof Stopped)) error = err;
+      // Workers unavailable here: carry on one seed at a time on the page.
+      await searchOnPage(job);
     }
     setSearching(false);
 
-    if (error) return report(error.message);
-    if (!best) return report('Search stopped before any seed finished.');
-    const scope = tried < seeds.length ? `Stopped after ${tried} of ${seeds.length} seeds` : `Best of ${tried} seeds`;
-    report(
-      `${scope}: seed ${best.seed}, opening frame ${pct(best.mix)} sorted. ` +
-        `The furthest from mixed was ${pct(worst.mix)}.`
-    );
+    if (job.error) return report(job.error);
+    if (!job.best) return report('Search stopped before any seed finished.');
+    const best = job.best;
+    const speed = `${rate().toFixed(0)} seeds/s on ${cores()}`;
+    if (best.mix === 0.5) {
+      report(
+        `Seed ${best.seed} opens exactly 50.0% sorted, found after ${fmt(job.done)} ` +
+          `${job.done === 1 ? 'try' : 'tries'} (${speed}). Stopped there, since nothing can beat it.`
+      );
+    } else {
+      const scope = job.done < tries ? `Stopped after ${fmt(job.done)} of ${fmt(tries)} seeds` : `Best of ${fmt(job.done)} seeds`;
+      report(
+        `${scope}: seed ${best.seed}, opening frame ${pct(best.mix)} sorted. ` +
+          `The furthest from mixed was ${pct(job.worst.mix)}. ${speed}.`
+      );
+    }
     el.seed.value = String(best.seed);
     saveSettings();
     rerun();
