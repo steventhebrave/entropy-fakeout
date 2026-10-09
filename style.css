@@ -143,6 +143,7 @@ fieldset.spaced { margin-top: 22px; }
 .help { margin: 0 0 10px; font-size: 13px; color: var(--muted); max-width: 60ch; }
 .search-row { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 14px; }
 .search-row .field { width: 9rem; }
+.search-row .field.auto { width: auto; }
 .reset-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 14px; font-size: 13px; color: var(--muted); }
 button.quiet { min-height: 30px; padding: 0 10px; font-weight: 500; font-size: 13px; background: transparent; }
 .run-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }

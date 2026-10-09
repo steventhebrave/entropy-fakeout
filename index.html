@@ -75,7 +75,15 @@
             <label class="field" for="speed"><span>RMS speed, px/s</span>
               <input id="speed" type="number" min="10" max="2000" step="10" value="300" inputmode="decimal"></label>
             <label class="field" for="duration"><span>Duration, s</span>
-              <input id="duration" type="number" min="1" max="120" step="1" value="30" inputmode="decimal"></label>
+              <input id="duration" type="number" min="1" max="300" step="1" value="30" inputmode="decimal"></label>
+            <label class="field" for="fps"><span>Frame rate</span>
+              <select id="fps">
+                <option value="24">24 fps</option>
+                <option value="25">25 fps</option>
+                <option value="30">30 fps</option>
+                <option value="50">50 fps</option>
+                <option value="60" selected>60 fps</option>
+              </select></label>
             <div class="field">
               <label for="seed">Random seed</label>
               <div class="seed-row">
@@ -120,6 +128,25 @@
           </div>
           <div class="status" id="search-status" aria-live="polite"></div>
         </fieldset>
+
+        <fieldset class="spaced">
+          <legend class="eyebrow">Export frames</legend>
+          <p class="help">Saves every frame of the current run as a numbered PNG, at the run's frame rate, with the colours and display options you see now. In Chrome, Edge and other Chromium browsers you pick a folder and the frames are written into a new folder inside it. Other browsers download a ZIP file at the end.</p>
+          <div class="search-row">
+            <label class="field auto" for="export-size"><span>Size</span>
+              <select id="export-size">
+                <option value="4k" selected>3840 × 2160 (4K)</option>
+                <option value="hd">1920 × 1080 (HD)</option>
+              </select></label>
+            <label class="field auto" for="export-bg"><span>Background</span>
+              <select id="export-bg">
+                <option value="box" selected>Box colour</option>
+                <option value="transparent">Transparent</option>
+              </select></label>
+            <button id="export" type="button">Export frames…</button>
+          </div>
+          <div class="status" id="export-status" aria-live="polite"></div>
+        </fieldset>
       </form>
       <div class="status" id="status" aria-live="polite"></div>
       <div class="reset-row">
@@ -146,6 +173,7 @@
   </div>
 </div>
 <script src="sim.js"></script>
+<script src="frames.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

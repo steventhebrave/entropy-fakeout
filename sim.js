@@ -288,9 +288,11 @@
       for (let i = 0; i < this.n; i++) this.predict(i);
     }
 
-    // Switch the membrane on or off mid-run.
-    setMembrane(on) {
+    // Switch the membrane on or off at time t (default: the last event).
+    setMembrane(on, t = this.t) {
       if (!this.membrane || this.membrane.on === on) return;
+      this.advanceTo(t);
+      this.drift(t); // predict from the moment of the switch
       this.membrane.on = on;
       for (let i = 0; i < this.n; i++) this.count[i]++; // void every pending event
       for (let i = 0; i < this.n; i++) this.predict(i);
@@ -397,6 +399,12 @@
       vy[j] -= k * dy;
     }
 
+    /*
+     * Process every event up to tEnd. Positions are only ever moved to event
+     * times, never to tEnd, so the trajectory is the same whatever times you
+     * advance to: any frame rate, any playback speed, or straight to the
+     * sort time. Read positions at tEnd with sampleInto().
+     */
     advanceTo(tEnd) {
       const q = this.queue;
       while (q.size > 0 && q.peek().t <= tEnd) {
@@ -425,7 +433,20 @@
           this.predict(i);
         }
       }
-      this.drift(tEnd);
+    }
+
+    /*
+     * Write positions at time t into out as x0, y0, x1, y1, ... starting at
+     * base. Call advanceTo(t) first so no event is pending before t.
+     */
+    sampleInto(t, out, base = 0) {
+      const { x, y, vx, vy, n } = this;
+      const dt = t - this.t;
+      for (let i = 0; i < n; i++) {
+        out[base + 2 * i] = x[i] + vx[i] * dt;
+        out[base + 2 * i + 1] = y[i] + vy[i] * dt;
+      }
+      return out;
     }
 
     kineticEnergy() {
@@ -451,11 +472,7 @@
     const energyStart = sim.kineticEnergy();
     for (let f = 0; f < frameCount; f++) {
       sim.advanceTo(f / fps);
-      const base = f * n * 2;
-      for (let i = 0; i < n; i++) {
-        frames[base + 2 * i] = sim.x[i];
-        frames[base + 2 * i + 1] = sim.y[i];
-      }
+      sim.sampleInto(f / fps, frames, f * n * 2);
       if (onProgress && (f + 1) % chunk === 0) await onProgress(f + 1, frameCount);
     }
     if (onProgress) await onProgress(frameCount, frameCount);
@@ -572,29 +589,26 @@
    * sort time: { mix, clump }. mix is how sorted it is (0.5 is perfectly
    * mixed); clump is clumpiness() or null.
    *
-   * Only simulates up to the sort time and only keeps two frames, but steps
-   * frame by frame exactly as record() does. Rounding differs if you step
-   * any other way, and in a chaotic gas that would lead to a different
-   * trajectory, so this is what guarantees the answer matches the full run.
+   * Only simulates up to the sort time and only keeps two frames. The sort
+   * time is rounded to a frame exactly as in the full run, and trajectories
+   * don't depend on how the simulation is stepped, so the answer matches the
+   * full run exactly.
    */
   async function openingStats(state, opts) {
-    const { sortTime, fps, split = 'even', onProgress, chunk = 30 } = opts;
+    const { sortTime, fps, split = 'even', onProgress } = opts;
     const n = state.n;
-    const sortFrame = Math.max(0, Math.round(sortTime * fps));
+    const tSort = Math.max(0, Math.round(sortTime * fps)) / fps;
     const sim = new Simulator(state);
     const frames = new Float32Array(2 * n * 2); // the opening frame, then the sort frame
-    for (let f = 0; f <= sortFrame; f++) {
-      sim.advanceTo(f / fps);
-      for (const slot of [f === 0 ? 0 : -1, f === sortFrame ? 1 : -1]) {
-        if (slot < 0) continue;
-        const base = slot * n * 2;
-        for (let i = 0; i < n; i++) {
-          frames[base + 2 * i] = sim.x[i];
-          frames[base + 2 * i + 1] = sim.y[i];
-        }
-      }
-      if (onProgress && (f + 1) % chunk === 0) await onProgress(f + 1, sortFrame + 1);
+    sim.sampleInto(0, frames, 0);
+    // Half-second steps, only so a long run can report progress.
+    for (let k = 1; ; k++) {
+      const t = Math.min(tSort, k * 0.5);
+      sim.advanceTo(t);
+      if (onProgress) await onProgress(t, tSort);
+      if (t >= tSort) break;
     }
+    sim.sampleInto(tSort, frames, n * 2);
     const { labels, boundary } = labelFrame(frames, n * 2, n, state.width, split);
     return {
       mix: sortednessAt({ n, frames }, labels, boundary, 0),

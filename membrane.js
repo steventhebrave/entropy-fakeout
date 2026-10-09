@@ -4,10 +4,10 @@
   'use strict';
 
   const Sim = window.EntropySim;
+  const Frames = window.EntropyFrames;
   const BOX = { width: 960, height: 540 };
   const MEMBRANE_X = BOX.width / 2;
-  const FPS = 60; // the simulation always steps in 1/60 s, whatever the display does
-  const SAMPLE_EVERY = 6; // frames between sortedness samples (0.1 s)
+  const SAMPLE = 0.1; // seconds between sortedness samples
   const MAX_STEP = 0.1; // longest real-time jump per animation frame, in seconds
   const MIN_SPAN = 60; // the timeline shows at least this many seconds
 
@@ -24,6 +24,12 @@
     order: $('order-readout'),
     rate: $('rate'),
     membraneOn: $('membrane-on'),
+    exportFps: $('export-fps'),
+    exportDuration: $('export-duration'),
+    exportSize: $('export-size'),
+    exportBg: $('export-bg'),
+    exportBtn: $('export'),
+    exportStatus: $('export-status'),
     showMembrane: $('show-membrane'),
     form: $('settings'),
     pending: $('pending'),
@@ -39,9 +45,12 @@
   const state = {
     sim: null,
     labels: null,
-    frame: 0, // simulation frame shown
     clock: 0, // playback time in seconds; the simulation catches up to it
-    history: [], // sortedness every SAMPLE_EVERY frames
+    pos: null, // positions at the clock: x0, y0, x1, y1, ...
+    scratch: null,
+    history: [], // sortedness every SAMPLE seconds
+    exporting: false,
+    stopExport: false,
     playing: false,
     lastTs: 0,
     ranWith: null,
@@ -78,7 +87,8 @@
 
   // Remembered in this browser between visits, separately from the fake-out.
   const STORAGE_KEY = 'entropy-fakeout:membrane';
-  const SAVED = ['n', 'radius', 'speed', 'seed', 'rate', 'membrane-on', 'show-membrane'];
+  const SAVED = ['n', 'radius', 'speed', 'seed', 'rate', 'membrane-on', 'show-membrane', 'export-fps',
+    'export-duration', 'export-size', 'export-bg'];
 
   function saveSettings() {
     const data = {};
@@ -145,9 +155,10 @@
       membrane: { x: MEMBRANE_X, labels: state.labels, on: el.membraneOn.checked },
     });
     state.energyStart = state.sim.kineticEnergy();
-    state.frame = 0;
     state.clock = 0;
-    state.history = [sortedness()];
+    state.pos = state.sim.sampleInto(0, new Float64Array(settings.n * 2));
+    state.scratch = new Float64Array(settings.n * 2);
+    state.history = [sortedness(state.pos)];
     state.ranWith = settings;
     updatePending();
     showStatus();
@@ -155,23 +166,27 @@
   }
 
   // Share of particles on their own colour's side: blue left, red right.
-  function sortedness() {
-    const { sim, labels } = state;
+  function sortedness(pos) {
+    const { labels } = state;
     let good = 0;
-    for (let i = 0; i < sim.n; i++) {
-      if ((sim.x[i] < MEMBRANE_X) === (labels[i] === Sim.BLUE)) good++;
+    for (let i = 0; i < labels.length; i++) {
+      if ((pos[2 * i] < MEMBRANE_X) === (labels[i] === Sim.BLUE)) good++;
     }
-    return good / sim.n;
+    return good / labels.length;
   }
 
-  // Step the simulation in whole frames until it reaches the playback clock.
+  // Bring the simulation up to the playback clock, sampling sortedness every
+  // SAMPLE seconds on the way. The trajectory doesn't depend on where it
+  // stops, so a seed gives the same run at any playback speed or frame rate.
   function catchUp() {
     const { sim } = state;
-    while ((state.frame + 1) / FPS <= state.clock) {
-      state.frame++;
-      sim.advanceTo(state.frame / FPS);
-      if (state.frame % SAMPLE_EVERY === 0) state.history.push(sortedness());
+    while (state.history.length * SAMPLE <= state.clock) {
+      const t = state.history.length * SAMPLE;
+      sim.advanceTo(t);
+      state.history.push(sortedness(sim.sampleInto(t, state.scratch)));
     }
+    sim.advanceTo(state.clock);
+    sim.sampleInto(state.clock, state.pos);
   }
 
   // ---------- drawing ----------
@@ -195,13 +210,26 @@
     return dpr;
   }
 
-  // A dashed line: dark while the membrane works, faint while it is off.
-  function drawMembrane(ctx, s, dpr) {
-    if (!el.showMembrane.checked) return;
+  // What the box shows, from the current settings: also used for export.
+  function sceneOptions() {
     const c = state.colours;
-    const px = dpr / s; // one CSS pixel in world units
+    return {
+      membrane: el.showMembrane.checked ? (el.membraneOn.checked ? c.ink : c.line) : null,
+      colours: [c.blue, c.red], // indexed by Sim.BLUE, Sim.RED
+    };
+  }
+
+  // Draw positions pos in world units. px is one screen pixel in world
+  // units, for line widths. The membrane is a dashed line: dark while it
+  // works, faint while it is off.
+  function drawScene(ctx, pos, scene, px) {
+    if (scene.membrane) drawMembrane(ctx, scene.membrane, px);
+    Frames.drawDiscs(ctx, pos, 0, state.labels.length, state.sim.r, state.labels, scene.colours);
+  }
+
+  function drawMembrane(ctx, colour, px) {
     ctx.save();
-    ctx.strokeStyle = el.membraneOn.checked ? c.ink : c.line;
+    ctx.strokeStyle = colour;
     ctx.lineWidth = 2 * px;
     ctx.setLineDash([8 * px, 6 * px]);
     ctx.beginPath();
@@ -221,23 +249,12 @@
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     const s = canvas.width / BOX.width;
     ctx.setTransform(s, 0, 0, s, 0, 0);
-    drawMembrane(ctx, s, dpr);
-    const { sim, labels } = state;
-    if (!sim) return;
-    const r = sim.r;
-    for (const [label, colour] of [
-      [Sim.BLUE, c.blue],
-      [Sim.RED, c.red],
-    ]) {
-      ctx.beginPath();
-      for (let i = 0; i < sim.n; i++) {
-        if (labels[i] !== label) continue;
-        ctx.moveTo(sim.x[i] + r, sim.y[i]);
-        ctx.arc(sim.x[i], sim.y[i], r, 0, 2 * Math.PI);
-      }
-      ctx.fillStyle = colour;
-      ctx.fill();
+    if (!state.sim) {
+      const membrane = sceneOptions().membrane;
+      if (membrane) drawMembrane(ctx, membrane, dpr / s);
+      return;
     }
+    drawScene(ctx, state.pos, sceneOptions(), dpr / s);
   }
 
   const TL = { left: 46, right: 12, top: 10, bottom: 22 };
@@ -256,7 +273,7 @@
     const plotBottom = h - TL.bottom;
     const plotH = plotBottom - TL.top;
     const yOf = (v) => plotBottom - Math.max(0, Math.min(1, (v - 0.5) / 0.5)) * plotH;
-    const span = Math.max(MIN_SPAN, state.frame / FPS);
+    const span = Math.max(MIN_SPAN, state.clock);
     const xOf = (t) => TL.left + (t / span) * plotW;
 
     ctx.font = c.font;
@@ -281,7 +298,7 @@
 
     const hist = state.history;
     if (hist.length < 2) return;
-    const dt = SAMPLE_EVERY / FPS;
+    const dt = SAMPLE;
     ctx.beginPath();
     ctx.moveTo(xOf(0), plotBottom);
     hist.forEach((v, k) => ctx.lineTo(xOf(k * dt), yOf(v)));
@@ -306,8 +323,8 @@
 
   function updateReadouts() {
     if (!state.sim) return;
-    el.time.textContent = `${(state.frame / FPS).toFixed(2)} s`;
-    el.order.textContent = `${Math.round(sortedness() * 100)}%`;
+    el.time.textContent = `${state.clock.toFixed(2)} s`;
+    el.order.textContent = `${Math.round(sortedness(state.pos) * 100)}%`;
   }
 
   function showStatus() {
@@ -328,8 +345,8 @@
     for (let i = 0; i < sim.n; i++) {
       if (labels[i] === Sim.BLUE) {
         blues++;
-        if (sim.x[i] < MEMBRANE_X) blueLeft++;
-      } else if (sim.x[i] >= MEMBRANE_X) redRight++;
+        if (state.pos[2 * i] < MEMBRANE_X) blueLeft++;
+      } else if (state.pos[2 * i] >= MEMBRANE_X) redRight++;
     }
     const drift = Math.abs(sim.kineticEnergy() - state.energyStart) / state.energyStart;
     const lines = [
@@ -379,6 +396,83 @@
     requestAnimationFrame(tick);
   }
 
+  // ---------- exporting frames ----------
+
+  const EXPORT_SIZES = { '4k': [3840, 2160], hd: [1920, 1080] };
+
+  // Re-runs the current settings from the start, sampling at the chosen frame
+  // rate. Trajectories don't depend on how they're sampled, so this is the
+  // same run as on screen, as long as the membrane isn't switched mid-run.
+  async function exportRun() {
+    if (state.exporting) {
+      state.stopExport = true;
+      return;
+    }
+    const report = (text) => {
+      el.exportStatus.textContent = text;
+    };
+    const blocked = Frames.unavailableReason();
+    if (blocked) return report(blocked);
+    if (!state.ranWith) return report('Start a run first.');
+
+    const settings = state.ranWith;
+    const fps = [24, 25, 30, 50, 60].includes(Number(el.exportFps.value)) ? Number(el.exportFps.value) : 60;
+    const duration = num(el.exportDuration, 60, 1, 600);
+    const count = Math.floor(duration * fps + 1e-9) + 1;
+    const [width, height] = EXPORT_SIZES[el.exportSize.value] || EXPORT_SIZES['4k'];
+    const scale = width / BOX.width;
+    const transparent = el.exportBg.value === 'transparent';
+    const box = state.colours.box;
+    const scene = sceneOptions();
+    const sim = new Sim.Simulator({
+      ...Sim.createInitialState({ ...settings, ...BOX, start: 'random' }),
+      membrane: { x: MEMBRANE_X, labels: state.labels, on: el.membraneOn.checked },
+    });
+    const pos = new Float64Array(settings.n * 2);
+    const name = `membrane_seed-${settings.seed}_${fps}fps_${width}x${height}`;
+
+    setPlaying(false);
+    state.exporting = true;
+    state.stopExport = false;
+    el.exportBtn.textContent = 'Stop export';
+    const started = performance.now();
+    try {
+      const result = await Frames.exportFrames({
+        name,
+        count,
+        width,
+        height,
+        stopped: () => state.stopExport,
+        draw: (ctx, k) => {
+          if (!transparent) {
+            ctx.fillStyle = box;
+            ctx.fillRect(0, 0, width, height);
+          }
+          ctx.setTransform(scale, 0, 0, scale, 0, 0);
+          sim.advanceTo(k / fps);
+          drawScene(ctx, sim.sampleInto(k / fps, pos), scene, 1);
+        },
+        onProgress: (done, total) => {
+          const secs = (performance.now() - started) / 1000;
+          const left = (secs / done) * (total - done);
+          report(`Saving frame ${done.toLocaleString()} of ${total.toLocaleString()} · about ${Math.ceil(left)} s left`);
+        },
+      });
+      if (!result.stopped) {
+        report(`Saved ${result.saved.toLocaleString()} frames at ${width} × ${height}, ${fps} fps, to ${result.where}.`);
+      } else if (result.kept) {
+        report(`Stopped. ${result.saved.toLocaleString()} frames were saved to ${result.where}.`);
+      } else {
+        report('Stopped. Nothing was saved.');
+      }
+    } catch (err) {
+      report(err.name === 'AbortError' ? 'Export cancelled.' : `Export failed: ${err.message}`);
+    } finally {
+      state.exporting = false;
+      el.exportBtn.textContent = 'Export frames…';
+    }
+  }
+
   // ---------- events ----------
 
   el.form.addEventListener('submit', (e) => {
@@ -392,13 +486,14 @@
     updatePending();
   });
   el.membraneOn.addEventListener('change', () => {
-    if (state.sim) state.sim.setMembrane(el.membraneOn.checked);
+    if (state.sim) state.sim.setMembrane(el.membraneOn.checked, state.clock);
     render();
   });
   el.showMembrane.addEventListener('change', render);
   el.play.addEventListener('click', () => setPlaying(!state.playing));
   el.restart.addEventListener('click', restart);
   el.reset.addEventListener('click', resetSettings);
+  el.exportBtn.addEventListener('click', exportRun);
   for (const type of ['input', 'change']) {
     document.addEventListener(type, (e) => {
       if (SAVED.includes(e.target.id)) saveSettings();

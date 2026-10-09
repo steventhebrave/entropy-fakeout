@@ -84,6 +84,36 @@
         </div>
       </form>
       <div class="status" id="status" aria-live="polite"></div>
+      <fieldset class="spaced">
+        <legend class="eyebrow">Export frames</legend>
+        <p class="help">Runs the current gas again from the start and saves each frame as a numbered PNG, with the colours and display options you see now. The membrane stays as it is set when you export. In Chrome, Edge and other Chromium browsers you pick a folder and the frames are written into a new folder inside it. Other browsers download a ZIP file at the end.</p>
+        <div class="fields">
+          <label class="field" for="export-fps"><span>Frame rate</span>
+            <select id="export-fps">
+              <option value="24">24 fps</option>
+              <option value="25">25 fps</option>
+              <option value="30">30 fps</option>
+              <option value="50">50 fps</option>
+              <option value="60" selected>60 fps</option>
+            </select></label>
+          <label class="field" for="export-duration"><span>Length, s</span>
+            <input id="export-duration" type="number" min="1" max="600" step="1" value="60" inputmode="decimal"></label>
+          <label class="field" for="export-size"><span>Size</span>
+            <select id="export-size">
+              <option value="4k" selected>3840 × 2160 (4K)</option>
+              <option value="hd">1920 × 1080 (HD)</option>
+            </select></label>
+          <label class="field" for="export-bg"><span>Background</span>
+            <select id="export-bg">
+              <option value="box" selected>Box colour</option>
+              <option value="transparent">Transparent</option>
+            </select></label>
+        </div>
+        <div class="run-row" style="margin-top: 12px">
+          <button id="export" type="button">Export frames…</button>
+        </div>
+        <div class="status" id="export-status" aria-live="polite"></div>
+      </fieldset>
       <div class="reset-row">
         <span>Settings are saved in this browser.</span>
         <button id="reset" type="button" class="quiet">Reset to defaults</button>
@@ -108,6 +138,7 @@
   </div>
 </div>
 <script src="sim.js"></script>
+<script src="frames.js"></script>
 <script src="membrane.js"></script>
 </body>
 </html>

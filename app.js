@@ -3,8 +3,9 @@
   'use strict';
 
   const Sim = window.EntropySim;
+  const Frames = window.EntropyFrames;
   const BOX = { width: 960, height: 540 };
-  const FPS = 60;
+  const FRAME_RATES = [24, 25, 30, 50, 60];
   const MAX_STEP = 0.1; // longest real-time jump per animation frame, in seconds
 
   const $ = (id) => document.getElementById(id);
@@ -36,6 +37,11 @@
     split: $('split'),
     colour: $('colour'),
     showLine: $('show-line'),
+    fps: $('fps'),
+    exportSize: $('export-size'),
+    exportBg: $('export-bg'),
+    exportBtn: $('export'),
+    exportStatus: $('export-status'),
     simFields: $('sim-fields'),
     labelFields: $('label-fields'),
     tries: $('tries'),
@@ -61,6 +67,8 @@
     searching: false,
     stopSearch: false,
     cancelSearch: null, // stops a running worker search at once
+    exporting: false,
+    stopExport: false,
     colours: {},
   };
 
@@ -81,7 +89,8 @@
       n,
       radius: num(el.radius, 6, 1, 40),
       speed: num(el.speed, 300, 10, 2000),
-      duration: num(el.duration, 30, 1, 120),
+      duration: num(el.duration, 30, 1, 300),
+      fps: FRAME_RATES.includes(Number(el.fps.value)) ? Number(el.fps.value) : 60,
       seed: Math.round(num(el.seed, 1, 0, 4294967295)),
     };
   }
@@ -89,7 +98,8 @@
   // Remembered in this browser between visits.
   const STORAGE_KEY = 'entropy-fakeout:settings';
   const SAVED = ['start', 'gap', 'n', 'radius', 'speed', 'duration', 'seed', 'sort-time',
-    'split', 'colour', 'show-line', 'loop', 'rate', 'tries', 'max-clump'];
+    'split', 'colour', 'show-line', 'loop', 'rate', 'tries', 'max-clump', 'fps', 'export-size',
+    'export-bg'];
 
   function saveSettings() {
     const data = {};
@@ -177,40 +187,35 @@
 
     const s = canvas.width / rec.width;
     ctx.setTransform(s, 0, 0, s, 0, 0);
+    drawScene(ctx, rec, state.frame, sceneOptions(), dpr / s);
+  }
 
-    if (el.showLine.checked && state.sort) {
+  // What the box shows, from the current settings: also used for export.
+  function sceneOptions() {
+    const c = state.colours;
+    const coloured = el.colour.checked && state.sort;
+    return {
+      labels: coloured ? state.sort.labels : null,
+      colours: coloured ? [c.blue, c.red] : [c.grey], // indexed by Sim.BLUE, Sim.RED
+      line: el.showLine.checked && state.sort ? { x: state.sort.boundary, colour: c.muted } : null,
+    };
+  }
+
+  // Draw frame f in world units. px is one screen pixel in world units, for
+  // line widths.
+  function drawScene(ctx, rec, f, scene, px) {
+    if (scene.line) {
       ctx.save();
-      ctx.strokeStyle = c.muted;
-      ctx.lineWidth = (1.5 * dpr) / s;
-      ctx.setLineDash([(6 * dpr) / s, (6 * dpr) / s]);
+      ctx.strokeStyle = scene.line.colour;
+      ctx.lineWidth = 1.5 * px;
+      ctx.setLineDash([6 * px, 6 * px]);
       ctx.beginPath();
-      ctx.moveTo(state.sort.boundary, 0);
-      ctx.lineTo(state.sort.boundary, rec.height);
+      ctx.moveTo(scene.line.x, 0);
+      ctx.lineTo(scene.line.x, rec.height);
       ctx.stroke();
       ctx.restore();
     }
-
-    const { n, radius: r, frames } = rec;
-    const base = state.frame * n * 2;
-    const coloured = el.colour.checked && state.sort;
-    const groups = coloured
-      ? [
-          [Sim.BLUE, c.blue],
-          [Sim.RED, c.red],
-        ]
-      : [[-1, c.grey]];
-    for (const [label, colour] of groups) {
-      ctx.beginPath();
-      for (let i = 0; i < n; i++) {
-        if (label >= 0 && state.sort.labels[i] !== label) continue;
-        const x = frames[base + 2 * i];
-        const y = frames[base + 2 * i + 1];
-        ctx.moveTo(x + r, y);
-        ctx.arc(x, y, r, 0, 2 * Math.PI);
-      }
-      ctx.fillStyle = colour;
-      ctx.fill();
-    }
+    Frames.drawDiscs(ctx, rec.frames, f * rec.n * 2, rec.n, rec.radius, scene.labels, scene.colours);
   }
 
   // Timeline geometry in CSS pixels.
@@ -446,7 +451,7 @@
     try {
       rec = await Sim.record(initial, {
         duration: settings.duration,
-        fps: FPS,
+        fps: settings.fps,
         chunk: Math.max(2, Math.round(6000 / settings.n)),
         onProgress: (done, total) => {
           if (run !== state.run) throw new Error('superseded');
@@ -640,8 +645,8 @@
     const job = {
       base: { ...settings, ...BOX },
       opts: {
-        sortTime: num(el.sortTime, 15, 0, Math.floor(settings.duration * FPS + 1e-9) / FPS),
-        fps: FPS,
+        sortTime: num(el.sortTime, 15, 0, Math.floor(settings.duration * settings.fps + 1e-9) / settings.fps),
+        fps: settings.fps,
         split: el.split.value,
       },
       tries,
@@ -741,6 +746,74 @@
     rerun();
   }
 
+  // ---------- exporting frames ----------
+
+  const EXPORT_SIZES = { '4k': [3840, 2160], hd: [1920, 1080] };
+
+  async function exportRun() {
+    if (state.exporting) {
+      state.stopExport = true;
+      return;
+    }
+    const report = (text) => {
+      el.exportStatus.textContent = text;
+    };
+    const blocked = Frames.unavailableReason();
+    if (blocked) return report(blocked);
+    if (!state.rec || !state.sort) return report('Run the simulation first.');
+
+    // Everything the frames depend on is captured now, so changing settings
+    // while exporting doesn't affect them.
+    const rec = state.rec;
+    const scene = sceneOptions();
+    const box = state.colours.box;
+    const transparent = el.exportBg.value === 'transparent';
+    const [width, height] = EXPORT_SIZES[el.exportSize.value] || EXPORT_SIZES['4k'];
+    const scale = width / rec.width;
+    const seed = state.ranWith.seed;
+    const name = `fakeout_seed-${seed}_${rec.fps}fps_${width}x${height}`;
+
+    setPlaying(false);
+    state.exporting = true;
+    state.stopExport = false;
+    el.exportBtn.textContent = 'Stop export';
+    const started = performance.now();
+    try {
+      const result = await Frames.exportFrames({
+        name,
+        count: rec.frameCount,
+        width,
+        height,
+        stopped: () => state.stopExport,
+        draw: (ctx, f) => {
+          if (!transparent) {
+            ctx.fillStyle = box;
+            ctx.fillRect(0, 0, width, height);
+          }
+          ctx.setTransform(scale, 0, 0, scale, 0, 0);
+          drawScene(ctx, rec, f, scene, 1);
+        },
+        onProgress: (done, total) => {
+          const secs = (performance.now() - started) / 1000;
+          const left = (secs / done) * (total - done);
+          report(`Saving frame ${fmt(done)} of ${fmt(total)} · about ${Math.ceil(left)} s left`);
+        },
+      });
+      if (!result.stopped) {
+        report(`Saved ${fmt(result.saved)} frames at ${width} × ${height}, ${rec.fps} fps, to ${result.where}.`);
+      } else if (result.kept) {
+        report(`Stopped. ${fmt(result.saved)} frames were saved to ${result.where}.`);
+      } else {
+        report('Stopped. Nothing was saved.');
+      }
+    } catch (err) {
+      report(err.name === 'AbortError' ? 'Export cancelled.' : `Export failed: ${err.message}`);
+    } finally {
+      state.exporting = false;
+      el.exportBtn.textContent = 'Export frames…';
+    }
+  }
+
   // ---------- events ----------
 
   el.form.addEventListener('submit', (e) => {
@@ -765,6 +838,7 @@
     updatePending();
   });
   el.search.addEventListener('click', searchSeeds);
+  el.exportBtn.addEventListener('click', exportRun);
   el.reset.addEventListener('click', resetSettings);
   for (const type of ['input', 'change']) {
     document.addEventListener(type, (e) => {

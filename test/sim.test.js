@@ -6,6 +6,12 @@ const Sim = require('../sim.js');
 
 const BOX = { width: 960, height: 540 };
 
+// Advance a simulator to time t and return positions as x0, y0, x1, y1, ...
+function at(sim, t) {
+  sim.advanceTo(t);
+  return sim.sampleInto(t, new Float64Array(sim.n * 2));
+}
+
 function makeState(overrides = {}) {
   return Sim.createInitialState({ n: 200, radius: 6, speed: 300, seed: 1, ...BOX, ...overrides });
 }
@@ -24,8 +30,8 @@ test('a lone particle bounces off the walls exactly', () => {
   // Travel range is x = 10..950, so one round trip from x = 100 takes 9.4 s.
   sim.advanceTo(4);
   assert.equal(sim.wallCollisions, 0);
-  sim.advanceTo(9.4);
-  assert.ok(Math.abs(sim.x[0] - 100) < 1e-9, `x = ${sim.x[0]}`);
+  const p = at(sim, 9.4);
+  assert.ok(Math.abs(p[0] - 100) < 1e-9, `x = ${p[0]}`);
   assert.equal(sim.vx[0], 200);
   assert.equal(sim.wallCollisions, 2);
 });
@@ -228,14 +234,14 @@ function oneParticle(label, x, vx) {
 test('membrane lets blue through leftwards only', () => {
   // Blue starting right of the membrane, moving left: passes straight through.
   const sim = new Sim.Simulator(oneParticle(Sim.BLUE, 700, -200));
-  sim.advanceTo(2); // x = 300
+  let p = at(sim, 2); // x = 300
   assert.equal(sim.membraneBounces, 0);
-  assert.ok(Math.abs(sim.x[0] - 300) < 1e-9);
+  assert.ok(Math.abs(p[0] - 300) < 1e-9);
   // Left wall (x = 10) at 3.45 s, then back towards the membrane, bouncing
   // when its centre reaches it (x = 480) at 5.8 s, so by 6 s it is at 440.
-  sim.advanceTo(6);
+  p = at(sim, 6);
   assert.equal(sim.membraneBounces, 1);
-  assert.ok(sim.vx[0] < 0 && Math.abs(sim.x[0] - 440) < 1e-9, `x = ${sim.x[0]}`);
+  assert.ok(sim.vx[0] < 0 && Math.abs(p[0] - 440) < 1e-9, `x = ${p[0]}`);
 });
 
 test('membrane lets red through rightwards only', () => {
@@ -243,9 +249,9 @@ test('membrane lets red through rightwards only', () => {
   sim.advanceTo(2); // x = 660, passed through
   assert.equal(sim.membraneBounces, 0);
   // Right wall (x = 950) at 3.45 s, then back, bouncing at x = 480 at 5.8 s.
-  sim.advanceTo(6);
+  const p = at(sim, 6);
   assert.equal(sim.membraneBounces, 1);
-  assert.ok(sim.vx[0] > 0 && Math.abs(sim.x[0] - 520) < 1e-9, `x = ${sim.x[0]}`);
+  assert.ok(sim.vx[0] > 0 && Math.abs(p[0] - 520) < 1e-9, `x = ${p[0]}`);
 });
 
 test('a membrane sorts a random gas, conserving energy without overlaps', () => {
@@ -253,23 +259,24 @@ test('a membrane sorts a random gas, conserving energy without overlaps', () => 
   const labels = Sim.randomColours(s.n, 3);
   assert.equal(labels.filter((l) => l === Sim.BLUE).length, 100);
   const sim = new Sim.Simulator({ ...s, membrane: { x: BOX.width / 2, labels } });
-  const sorted = () => {
+  const sorted = (p) => {
     let good = 0;
-    for (let i = 0; i < s.n; i++) if ((sim.x[i] < BOX.width / 2) === (labels[i] === Sim.BLUE)) good++;
+    for (let i = 0; i < s.n; i++) if ((p[2 * i] < BOX.width / 2) === (labels[i] === Sim.BLUE)) good++;
     return good / s.n;
   };
   const e0 = sim.kineticEnergy();
-  assert.ok(sorted() < 0.65);
+  assert.ok(sorted(at(sim, 0)) < 0.65);
+  let p;
   for (let t = 1; t <= 120; t++) {
-    sim.advanceTo(t);
+    p = at(sim, t);
     for (let i = 0; i < s.n; i++) {
       for (let j = i + 1; j < s.n; j++) {
-        const d = Math.hypot(sim.x[i] - sim.x[j], sim.y[i] - sim.y[j]);
+        const d = Math.hypot(p[2 * i] - p[2 * j], p[2 * i + 1] - p[2 * j + 1]);
         assert.ok(d >= 2 * s.radius - 1e-6, `overlap at ${t} s`);
       }
     }
   }
-  assert.ok(sorted() > 0.97, `only ${sorted()} sorted after 120 s`);
+  assert.ok(sorted(p) > 0.97, `only ${sorted(p)} sorted after 120 s`);
   assert.ok(sim.membraneBounces > 100);
   assert.ok(Math.abs(sim.kineticEnergy() - e0) / e0 < 1e-9);
 });
@@ -286,4 +293,50 @@ test('switching the membrane off stops the sorting', () => {
   sim.setMembrane(true);
   sim.advanceTo(40);
   assert.ok(sim.membraneBounces > bounces);
+});
+
+test('trajectories do not depend on frame rate or how the simulation is stepped', async () => {
+  const s = Sim.createInitialState({ n: 200, radius: 6, speed: 300, seed: 8, ...BOX });
+  const a = await Sim.record(s, { duration: 10, fps: 60 });
+  const b = await Sim.record(s, { duration: 10, fps: 25 });
+  for (let sec = 0; sec <= 10; sec++) {
+    const fa = a.frames.subarray(sec * 60 * 400, (sec * 60 + 1) * 400);
+    const fb = b.frames.subarray(sec * 25 * 400, (sec * 25 + 1) * 400);
+    assert.deepEqual(fa, fb, `differs at ${sec} s`);
+  }
+  // Jumping straight to the end agrees too.
+  const sim = new Sim.Simulator(s);
+  const end = Float32Array.from(at(sim, 10));
+  assert.deepEqual(end, a.frames.subarray(600 * 400, 601 * 400));
+});
+
+test('frame export ZIP files are valid', async () => {
+  const Frames = require('../frames.js');
+  const zlib = require('node:zlib');
+  const files = { 'frame_00000.png': 'first frame', 'frame_00001.png': 'second, longer frame' };
+  for (const text of Object.values(files)) {
+    assert.equal(Frames.crc32(Buffer.from(text)), zlib.crc32(Buffer.from(text)));
+  }
+  const zip = new Frames.ZipWriter();
+  for (const [name, text] of Object.entries(files)) await zip.add(name, new Blob([text]));
+  const buf = Buffer.from(await zip.finish().arrayBuffer());
+
+  // Walk the central directory and read each file back through its local header.
+  const end = buf.length - 22;
+  assert.equal(buf.readUInt32LE(end), 0x06054b50);
+  assert.equal(buf.readUInt16LE(end + 10), 2);
+  let p = buf.readUInt32LE(end + 16);
+  for (const [name, text] of Object.entries(files)) {
+    assert.equal(buf.readUInt32LE(p), 0x02014b50);
+    const nameLen = buf.readUInt16LE(p + 28);
+    assert.equal(buf.toString('utf8', p + 46, p + 46 + nameLen), name);
+    const local = buf.readUInt32LE(p + 42);
+    assert.equal(buf.readUInt32LE(local), 0x04034b50);
+    const size = buf.readUInt32LE(local + 18);
+    const start = local + 30 + buf.readUInt16LE(local + 26);
+    const data = buf.subarray(start, start + size);
+    assert.equal(data.toString(), text);
+    assert.equal(buf.readUInt32LE(local + 14), zlib.crc32(data));
+    p += 46 + nameLen;
+  }
 });

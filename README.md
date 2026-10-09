@@ -26,7 +26,8 @@ it, and the arrow keys step through frames when the timeline has focus
    at random). `sim.js` runs an event-driven hard-disk simulation. Each collision with another disk or a wall is elastic and is
    resolved at the exact moment it happens, with no time step. Particles
    never overlap and kinetic energy is conserved to rounding error (about
-   1e-16 relative drift). Every frame (60 fps) is recorded.
+   1e-16 relative drift). Every frame is recorded, at the frame rate you
+   choose (24, 25, 30, 50 or 60 fps).
 2. **Label at the sort time.** At the sort-time frame, particles left of the
    dividing line become blue and the rest red.
 3. **Play the recording back** with those labels. The gas looks mixed,
@@ -41,7 +42,11 @@ if the second run is bit-for-bit identical. Recording the first run and
 replaying it guarantees that. It also makes scrubbing and changing the sort
 time instant, because relabelling does not need a new simulation.
 
-The same seed gives the same trajectories every time.
+The same seed gives the same trajectories every time. Positions are only
+ever updated at collisions, never at frame times, so the trajectory doesn't
+depend on the frame rate either: changing it only changes how often the
+same run is sampled. (This changed once, so seeds found before it give
+different runs now.)
 
 For slow motion, lower the RMS speed rather than the playback speed. A
 hard-disk gas has no built-in timescale, so a gas at 75 px/s played at 1×
@@ -80,9 +85,9 @@ default limit. The search only considers seeds within the limit, and the
 status under the settings shows the clumpiness of the current run.
 
 Seeds run in parallel, one Web Worker per CPU core, each running the same
-`sim.js` as the player. Each try only simulates up to the sort time, but it
-steps frame by frame exactly as the full run does, so the full run
-reproduces the mix it measured. From code: `Sim.findBestSeed(settings,
+`sim.js` as the player. Each try only simulates up to the sort time, and
+since trajectories don't depend on how the simulation is stepped, the full
+run reproduces exactly the mix it measured. From code: `Sim.findBestSeed(settings,
 seeds, { sortTime, fps, split, maxClump })` (one core).
 
 Why not Python or another language: the gas is chaotic, so a seed only
@@ -122,9 +127,10 @@ rightwards. The membrane acts on particle centres: a particle heading the
 wrong way bounces back when its centre reaches the line, so half of it
 pokes through first. (Equivalently, blue bounces off a wall one radius to
 the right of the line, and red off one a radius to the left.) Everything
-else is the same elastic physics as the fake-out. Nothing is simulated ahead: the page
-runs the simulation as it plays, always in steps of 1/60 s of simulated
-time, so a seed gives the same run whatever the display or playback speed.
+else is the same elastic physics as the fake-out. Nothing is simulated
+ahead: the page runs the simulation as it plays and draws the exact
+positions for each screen refresh, so it is smooth at any playback speed,
+and a seed gives the same run whatever the display or playback speed.
 With the default settings the gas is about 95% sorted after 20 to 30 s.
 The membrane can be switched off mid-run to watch the gas mix again.
 
@@ -138,12 +144,36 @@ sim.setMembrane(false); // and back on with true
 
 Without a membrane the simulator behaves exactly as before.
 
+## Exporting frames for video
+
+Both pages can save an animation as numbered PNG files (`frame_00000.png`,
+`frame_00001.png`, ...) at 3840 × 2160 (4K) or 1920 × 1080, with the box
+colour or a transparent background. Frames use the colours and display
+options on screen (light or dark theme, colours on or off, dividing line or
+membrane shown or hidden).
+
+- **Fake-out**: every frame of the current run, at its frame rate. Set the
+  frame rate before running the simulation; with a whole-second sort time,
+  the perfectly sorted moment is always one of the frames.
+- **Membrane**: the current gas re-run from the start at the frame rate and
+  length you choose. It's the same run as on screen, unless you switched the
+  membrane on or off mid-run; the export uses its setting at the time you
+  export.
+
+In Chrome, Edge and other Chromium browsers you pick a folder and the frames
+are written into a new folder inside it as they render. Other browsers
+build a ZIP file and download it at the end (limited to 4 GB). A 4K frame
+takes about 0.1 s and 400 KB, so a minute at 60 fps is about 6 minutes and
+1.5 GB. Exporting needs the page opened directly from your copy of the
+files; it is switched off in the hosted preview.
+
 ## Files
 
 - `sim.js`: physics, recording and labelling. Works in the browser
   (`window.EntropySim`) and in Node (`require('./sim.js')`).
 - `app.js`, `index.html`: the fake-out player.
 - `membrane.js`, `membrane.html`: the one-way membrane page.
+- `frames.js`: particle drawing and PNG frame export, shared by both pages.
 - `style.css`: styles shared by both pages.
 - `test/sim.test.js`: run with `npm test` (Node 18+).
 
