@@ -428,6 +428,24 @@
       this.drift(tEnd);
     }
 
+    // An independent copy with the same state and pending events. Advanced
+    // the same way, it follows the original bit for bit; the original is
+    // unaffected. (Events are never modified once queued, so the copy can
+    // share them.)
+    clone() {
+      const c = Object.create(Simulator.prototype);
+      Object.assign(c, this);
+      c.x = this.x.slice();
+      c.y = this.y.slice();
+      c.vx = this.vx.slice();
+      c.vy = this.vy.slice();
+      c.count = this.count.slice();
+      c.queue = new EventQueue();
+      c.queue.items = this.queue.items.slice();
+      c.membrane = this.membrane ? { ...this.membrane } : null;
+      return c;
+    }
+
     kineticEnergy() {
       let e = 0;
       for (let k = 0; k < this.n; k++) e += this.vx[k] * this.vx[k] + this.vy[k] * this.vy[k];
@@ -443,14 +461,16 @@
    * from it to let the caller yield (e.g. to keep a page responsive).
    */
   async function record(state, opts) {
-    const { duration, fps, onProgress, chunk = 30 } = opts;
+    const { duration, fps, onProgress, chunk = 30, snapshotEvery = 60 } = opts;
     const sim = new Simulator(state);
     const n = state.n;
     const frameCount = Math.floor(duration * fps + 1e-9) + 1;
     const frames = new Float32Array(frameCount * n * 2);
+    const snapshots = []; // the simulator every snapshotEvery frames, for Replay
     const energyStart = sim.kineticEnergy();
     for (let f = 0; f < frameCount; f++) {
       sim.advanceTo(f / fps);
+      if (f % snapshotEvery === 0) snapshots.push(sim.clone());
       const base = f * n * 2;
       for (let i = 0; i < n; i++) {
         frames[base + 2 * i] = sim.x[i];
@@ -469,11 +489,48 @@
       fps,
       frameCount,
       frames,
+      snapshots,
+      snapshotEvery,
       particleCollisions: sim.particleCollisions,
       wallCollisions: sim.wallCollisions,
       energyStart,
       energyEnd: sim.kineticEnergy(),
     };
+  }
+
+  /*
+   * Exact positions at any time in a recording, including between frames,
+   * for smooth slow motion. It re-simulates from the nearest snapshot,
+   * stepping frame by frame exactly as record() did so it stays on the
+   * recorded trajectory, then advances a throwaway copy to the requested
+   * time. Playing forward only ever steps a frame or two at a time.
+   */
+  class Replay {
+    constructor(rec) {
+      this.rec = rec;
+      this.sim = null;
+      this.frame = -1;
+    }
+
+    // A simulator positioned at the given time; read its x and y.
+    at(time) {
+      const { fps, frameCount, snapshots, snapshotEvery } = this.rec;
+      const end = (frameCount - 1) / fps;
+      time = Math.max(0, Math.min(end, time));
+      const k = Math.min(frameCount - 1, Math.floor(time * fps + 1e-9));
+      if (!this.sim || k < this.frame || k - this.frame > snapshotEvery) {
+        const s = Math.floor(k / snapshotEvery);
+        this.sim = snapshots[s].clone();
+        this.frame = s * snapshotEvery;
+      }
+      while (this.frame < k) {
+        this.frame++;
+        this.sim.advanceTo(this.frame / fps);
+      }
+      const view = this.sim.clone();
+      view.advanceTo(time);
+      return view;
+    }
   }
 
   /*
@@ -636,6 +693,7 @@
     randomColours,
     Simulator,
     record,
+    Replay,
     assignColours,
     sortedness,
     clumpiness,

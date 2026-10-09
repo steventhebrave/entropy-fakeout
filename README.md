@@ -43,6 +43,13 @@ time instant, because relabelling does not need a new simulation.
 
 The same seed gives the same trajectories every time.
 
+Frames are recorded every 1/60 s, but playback draws the exact positions at
+the current playback time, so slow motion stays smooth. The recording keeps
+a snapshot of the simulator every second; playback re-simulates from the
+nearest one, stepping exactly as the recording did, and advances a
+throwaway copy to the moment being shown. The membrane page does the same
+with its live simulation.
+
 ### Corner start
 
 Each cluster is a hexagonal lattice cut to a quarter disc around its corner,
