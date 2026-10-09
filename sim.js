@@ -25,6 +25,7 @@
 
   const WALL_X = -1; // event partner id for a left/right wall
   const WALL_Y = -2; // event partner id for a top/bottom wall
+  const MEMBRANE = -3; // event partner id for the one-way membrane
 
   const BLUE = 0;
   const RED = 1;
@@ -242,6 +243,20 @@
     return { n, radius, width, height, start, gap, x, y, vx, vy };
   }
 
+  // Exactly floor(n / 2) blue particles and the rest red, in random order.
+  function randomColours(n, seed) {
+    const rand = mulberry32((seed ^ 0x5bd1e995) >>> 0);
+    const labels = new Uint8Array(n).fill(RED);
+    labels.fill(BLUE, 0, Math.floor(n / 2));
+    for (let i = n - 1; i > 0; i--) {
+      const k = Math.floor(rand() * (i + 1));
+      const tmp = labels[i];
+      labels[i] = labels[k];
+      labels[k] = tmp;
+    }
+    return labels;
+  }
+
   /*
    * Event-driven simulator. Each particle keeps exactly one pending event in
    * the queue (its earliest predicted collision). Events carry the collision
@@ -263,6 +278,21 @@
       this.queue = new EventQueue();
       this.particleCollisions = 0;
       this.wallCollisions = 0;
+      this.membraneBounces = 0;
+      // Optional one-way membrane: a vertical line at membrane.x that blue
+      // particles may only cross leftwards and red ones only rightwards.
+      // Particles going the wrong way bounce off it, like a wall.
+      this.membrane = state.membrane
+        ? { x: state.membrane.x, labels: state.membrane.labels, on: state.membrane.on !== false }
+        : null;
+      for (let i = 0; i < this.n; i++) this.predict(i);
+    }
+
+    // Switch the membrane on or off mid-run.
+    setMembrane(on) {
+      if (!this.membrane || this.membrane.on === on) return;
+      this.membrane.on = on;
+      for (let i = 0; i < this.n; i++) this.count[i]++; // void every pending event
       for (let i = 0; i < this.n; i++) this.predict(i);
     }
 
@@ -280,6 +310,22 @@
       if (dt < best) {
         best = dt;
         partner = WALL_Y;
+      }
+
+      // Membrane: a particle whose centre is on its own colour's side and is
+      // heading for the other side bounces when its edge reaches the line.
+      // If it already overlaps the line (it turned back while passing
+      // through), the bounce is immediate.
+      const m = this.membrane;
+      if (m && m.on) {
+        dt = Infinity;
+        if (m.labels[i] === BLUE) {
+          if (x[i] < m.x && vx[i] > 0) dt = (m.x - r - x[i]) / vx[i];
+        } else if (x[i] > m.x && vx[i] < 0) dt = (m.x + r - x[i]) / vx[i];
+        if (dt < best) {
+          best = dt;
+          partner = MEMBRANE;
+        }
       }
 
       // Time until disks i and j touch. This is the root of
@@ -370,10 +416,11 @@
           this.predict(i);
           this.predict(j);
         } else {
-          if (j === WALL_X) this.vx[i] = -this.vx[i];
-          else this.vy[i] = -this.vy[i];
+          if (j === WALL_Y) this.vy[i] = -this.vy[i];
+          else this.vx[i] = -this.vx[i];
           this.count[i]++;
-          this.wallCollisions++;
+          if (j === MEMBRANE) this.membraneBounces++;
+          else this.wallCollisions++;
           this.predict(i);
         }
       }
@@ -585,6 +632,7 @@
     RED,
     mulberry32,
     createInitialState,
+    randomColours,
     Simulator,
     record,
     assignColours,

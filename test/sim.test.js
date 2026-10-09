@@ -211,3 +211,79 @@ test('clumpiness tells a random mix from colours grouped on one side', () => {
 
   assert.equal(Sim.clumpiness(frames, 0, s.n, sided, { ...s, start: 'random' }), null);
 });
+
+function oneParticle(label, x, vx) {
+  return {
+    n: 1,
+    radius: 10,
+    ...BOX,
+    x: Float64Array.of(x),
+    y: Float64Array.of(270),
+    vx: Float64Array.of(vx),
+    vy: Float64Array.of(0),
+    membrane: { x: 480, labels: Uint8Array.of(label) },
+  };
+}
+
+test('membrane lets blue through leftwards only', () => {
+  // Blue starting right of the membrane, moving left: passes straight through.
+  const sim = new Sim.Simulator(oneParticle(Sim.BLUE, 700, -200));
+  sim.advanceTo(2); // x = 300
+  assert.equal(sim.membraneBounces, 0);
+  assert.ok(Math.abs(sim.x[0] - 300) < 1e-9);
+  // Left wall (x = 10) at 3.45 s, then back towards the membrane, bouncing
+  // when its edge touches it (x = 470) at 5.75 s, so by 6 s it is at 420.
+  sim.advanceTo(6);
+  assert.equal(sim.membraneBounces, 1);
+  assert.ok(sim.vx[0] < 0 && Math.abs(sim.x[0] - 420) < 1e-9, `x = ${sim.x[0]}`);
+});
+
+test('membrane lets red through rightwards only', () => {
+  const sim = new Sim.Simulator(oneParticle(Sim.RED, 260, 200));
+  sim.advanceTo(2); // x = 660, passed through
+  assert.equal(sim.membraneBounces, 0);
+  // Right wall (x = 950) at 3.45 s, then back, bouncing at x = 490 at 5.75 s.
+  sim.advanceTo(6);
+  assert.equal(sim.membraneBounces, 1);
+  assert.ok(sim.vx[0] > 0 && Math.abs(sim.x[0] - 540) < 1e-9, `x = ${sim.x[0]}`);
+});
+
+test('a membrane sorts a random gas, conserving energy without overlaps', () => {
+  const s = Sim.createInitialState({ n: 200, radius: 6, speed: 300, seed: 3, start: 'random', ...BOX });
+  const labels = Sim.randomColours(s.n, 3);
+  assert.equal(labels.filter((l) => l === Sim.BLUE).length, 100);
+  const sim = new Sim.Simulator({ ...s, membrane: { x: BOX.width / 2, labels } });
+  const sorted = () => {
+    let good = 0;
+    for (let i = 0; i < s.n; i++) if ((sim.x[i] < BOX.width / 2) === (labels[i] === Sim.BLUE)) good++;
+    return good / s.n;
+  };
+  const e0 = sim.kineticEnergy();
+  assert.ok(sorted() < 0.65);
+  for (let t = 1; t <= 120; t++) {
+    sim.advanceTo(t);
+    for (let i = 0; i < s.n; i++) {
+      for (let j = i + 1; j < s.n; j++) {
+        const d = Math.hypot(sim.x[i] - sim.x[j], sim.y[i] - sim.y[j]);
+        assert.ok(d >= 2 * s.radius - 1e-6, `overlap at ${t} s`);
+      }
+    }
+  }
+  assert.ok(sorted() > 0.97, `only ${sorted()} sorted after 120 s`);
+  assert.ok(sim.membraneBounces > 100);
+  assert.ok(Math.abs(sim.kineticEnergy() - e0) / e0 < 1e-9);
+});
+
+test('switching the membrane off stops the sorting', () => {
+  const s = Sim.createInitialState({ n: 100, radius: 6, speed: 300, seed: 4, start: 'random', ...BOX });
+  const labels = Sim.randomColours(s.n, 4);
+  const sim = new Sim.Simulator({ ...s, membrane: { x: BOX.width / 2, labels } });
+  sim.advanceTo(5);
+  const bounces = sim.membraneBounces;
+  sim.setMembrane(false);
+  sim.advanceTo(30);
+  assert.equal(sim.membraneBounces, bounces);
+  sim.setMembrane(true);
+  sim.advanceTo(40);
+  assert.ok(sim.membraneBounces > bounces);
+});

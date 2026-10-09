@@ -347,8 +347,9 @@
 
   function setPlaying(on) {
     state.playing = on && !!state.rec;
-    el.iconPlay.hidden = state.playing;
-    el.iconPause.hidden = !state.playing;
+    // SVG elements have no .hidden property, so set the attribute directly.
+    el.iconPlay.toggleAttribute('hidden', state.playing);
+    el.iconPause.toggleAttribute('hidden', !state.playing);
     el.playLabel.textContent = state.playing ? 'Pause' : 'Play';
     el.play.setAttribute('aria-label', state.playing ? 'Pause' : 'Play');
     if (state.playing) {

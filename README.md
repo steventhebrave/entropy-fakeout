@@ -6,6 +6,15 @@ right at a chosen moment.
 
 Open `index.html` in a browser. Nothing to install or build.
 
+There are two versions, linked from each other's header:
+
+- **Fake-out** (`index.html`): ordinary physics, with the colours assigned
+  after the fact so the gas appears to sort itself.
+- **One-way membrane** (`membrane.html`): a live simulation where a
+  membrane down the middle lets blue through leftwards and red through
+  rightwards, and really does sort the gas. See
+  [One-way membrane](#one-way-membrane) below.
+
 Keyboard: **Space** plays or pauses, **N** picks a new random seed and runs
 it, and the arrow keys step through frames when the timeline has focus
 (hold Shift for 1 s steps).
@@ -97,11 +106,36 @@ particles, radius 6 px, RMS speed 300 px/s in a 960 × 540 box) it takes
 about 15 s for the memory of the sorted state to fade. A denser or slower
 gas needs a later sort time.
 
+## One-way membrane
+
+`membrane.html` starts with particles scattered at random over the box and
+exactly half of them, chosen at random, coloured blue. A membrane at the
+centre line lets blue particles cross only leftwards and red only
+rightwards. A particle heading the wrong way bounces off when its edge
+touches the membrane, just as it would off a wall; everything else is the
+same elastic physics as the fake-out. Nothing is simulated ahead: the page
+runs the simulation as it plays, always in steps of 1/60 s of simulated
+time, so a seed gives the same run whatever the display or playback speed.
+With the default settings the gas is about 95% sorted after 20 to 30 s.
+The membrane can be switched off mid-run to watch the gas mix again.
+
+From code, pass a membrane to the simulator:
+
+```js
+const labels = Sim.randomColours(state.n, seed);
+const sim = new Sim.Simulator({ ...state, membrane: { x: 480, labels } });
+sim.setMembrane(false); // and back on with true
+```
+
+Without a membrane the simulator behaves exactly as before.
+
 ## Files
 
 - `sim.js`: physics, recording and labelling. Works in the browser
   (`window.EntropySim`) and in Node (`require('./sim.js')`).
-- `app.js`, `index.html`: the player.
+- `app.js`, `index.html`: the fake-out player.
+- `membrane.js`, `membrane.html`: the one-way membrane page.
+- `style.css`: styles shared by both pages.
 - `test/sim.test.js`: run with `npm test` (Node 18+).
 
 ## Using it from code
