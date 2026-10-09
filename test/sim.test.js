@@ -232,20 +232,20 @@ test('membrane lets blue through leftwards only', () => {
   assert.equal(sim.membraneBounces, 0);
   assert.ok(Math.abs(sim.x[0] - 300) < 1e-9);
   // Left wall (x = 10) at 3.45 s, then back towards the membrane, bouncing
-  // when its edge touches it (x = 470) at 5.75 s, so by 6 s it is at 420.
+  // when its centre reaches it (x = 480) at 5.8 s, so by 6 s it is at 440.
   sim.advanceTo(6);
   assert.equal(sim.membraneBounces, 1);
-  assert.ok(sim.vx[0] < 0 && Math.abs(sim.x[0] - 420) < 1e-9, `x = ${sim.x[0]}`);
+  assert.ok(sim.vx[0] < 0 && Math.abs(sim.x[0] - 440) < 1e-9, `x = ${sim.x[0]}`);
 });
 
 test('membrane lets red through rightwards only', () => {
   const sim = new Sim.Simulator(oneParticle(Sim.RED, 260, 200));
   sim.advanceTo(2); // x = 660, passed through
   assert.equal(sim.membraneBounces, 0);
-  // Right wall (x = 950) at 3.45 s, then back, bouncing at x = 490 at 5.75 s.
+  // Right wall (x = 950) at 3.45 s, then back, bouncing at x = 480 at 5.8 s.
   sim.advanceTo(6);
   assert.equal(sim.membraneBounces, 1);
-  assert.ok(sim.vx[0] > 0 && Math.abs(sim.x[0] - 540) < 1e-9, `x = ${sim.x[0]}`);
+  assert.ok(sim.vx[0] > 0 && Math.abs(sim.x[0] - 520) < 1e-9, `x = ${sim.x[0]}`);
 });
 
 test('a membrane sorts a random gas, conserving energy without overlaps', () => {

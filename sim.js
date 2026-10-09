@@ -279,9 +279,9 @@
       this.particleCollisions = 0;
       this.wallCollisions = 0;
       this.membraneBounces = 0;
-      // Optional one-way membrane: a vertical line at membrane.x that blue
-      // particles may only cross leftwards and red ones only rightwards.
-      // Particles going the wrong way bounce off it, like a wall.
+      // Optional one-way membrane: a vertical line at membrane.x that the
+      // centres of blue particles may only cross leftwards and those of red
+      // ones only rightwards. Particles going the wrong way bounce off it.
       this.membrane = state.membrane
         ? { x: state.membrane.x, labels: state.membrane.labels, on: state.membrane.on !== false }
         : null;
@@ -312,16 +312,17 @@
         partner = WALL_Y;
       }
 
-      // Membrane: a particle whose centre is on its own colour's side and is
-      // heading for the other side bounces when its edge reaches the line.
-      // If it already overlaps the line (it turned back while passing
-      // through), the bounce is immediate.
+      // Membrane: it acts on particle centres. A particle whose centre is on
+      // its own colour's side and heading for the other side bounces when its
+      // centre reaches the line, so half of it overlaps the line at that
+      // moment. (Equivalently, blue bounces off a wall one radius right of
+      // the line and red off one a radius left of it.)
       const m = this.membrane;
       if (m && m.on) {
         dt = Infinity;
         if (m.labels[i] === BLUE) {
-          if (x[i] < m.x && vx[i] > 0) dt = (m.x - r - x[i]) / vx[i];
-        } else if (x[i] > m.x && vx[i] < 0) dt = (m.x + r - x[i]) / vx[i];
+          if (x[i] < m.x && vx[i] > 0) dt = (m.x - x[i]) / vx[i];
+        } else if (x[i] > m.x && vx[i] < 0) dt = (m.x - x[i]) / vx[i];
         if (dt < best) {
           best = dt;
           partner = MEMBRANE;

@@ -111,9 +111,11 @@ gas needs a later sort time.
 `membrane.html` starts with particles scattered at random over the box and
 exactly half of them, chosen at random, coloured blue. A membrane at the
 centre line lets blue particles cross only leftwards and red only
-rightwards. A particle heading the wrong way bounces off when its edge
-touches the membrane, just as it would off a wall; everything else is the
-same elastic physics as the fake-out. Nothing is simulated ahead: the page
+rightwards. The membrane acts on particle centres: a particle heading the
+wrong way bounces back when its centre reaches the line, so half of it
+pokes through first. (Equivalently, blue bounces off a wall one radius to
+the right of the line, and red off one a radius to the left.) Everything
+else is the same elastic physics as the fake-out. Nothing is simulated ahead: the page
 runs the simulation as it plays, always in steps of 1/60 s of simulated
 time, so a seed gives the same run whatever the display or playback speed.
 With the default settings the gas is about 95% sorted after 20 to 30 s.
