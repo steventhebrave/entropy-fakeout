@@ -24,6 +24,7 @@
     order: $('order-readout'),
     rate: $('rate'),
     membraneOn: $('membrane-on'),
+    showMembrane: $('show-membrane'),
     form: $('settings'),
     pending: $('pending'),
     status: $('status'),
@@ -77,7 +78,7 @@
 
   // Remembered in this browser between visits, separately from the fake-out.
   const STORAGE_KEY = 'entropy-fakeout:membrane';
-  const SAVED = ['n', 'radius', 'speed', 'seed', 'rate', 'membrane-on'];
+  const SAVED = ['n', 'radius', 'speed', 'seed', 'rate', 'membrane-on', 'show-membrane'];
 
   function saveSettings() {
     const data = {};
@@ -194,35 +195,19 @@
     return dpr;
   }
 
+  // A dashed line: dark while the membrane works, faint while it is off.
   function drawMembrane(ctx, s, dpr) {
+    if (!el.showMembrane.checked) return;
     const c = state.colours;
-    const on = el.membraneOn.checked;
     const px = dpr / s; // one CSS pixel in world units
     ctx.save();
-    ctx.strokeStyle = on ? c.ink : c.muted;
-    ctx.lineWidth = (on ? 2 : 1.5) * px;
-    if (!on) ctx.setLineDash([6 * px, 6 * px]);
+    ctx.strokeStyle = el.membraneOn.checked ? c.ink : c.line;
+    ctx.lineWidth = 2 * px;
+    ctx.setLineDash([8 * px, 6 * px]);
     ctx.beginPath();
     ctx.moveTo(MEMBRANE_X, 0);
     ctx.lineTo(MEMBRANE_X, BOX.height);
     ctx.stroke();
-    if (on) {
-      // Arrowheads showing which way each colour may cross.
-      const size = 7 * px;
-      const step = 30 * px;
-      let k = 0;
-      for (let y = step / 2; y < BOX.height; y += step, k++) {
-        const left = k % 2 === 0; // blue, pointing left
-        const dir = left ? -1 : 1;
-        ctx.fillStyle = left ? c.blue : c.red;
-        ctx.beginPath();
-        ctx.moveTo(MEMBRANE_X + dir * size, y);
-        ctx.lineTo(MEMBRANE_X - dir * size * 0.6, y - size * 0.8);
-        ctx.lineTo(MEMBRANE_X - dir * size * 0.6, y + size * 0.8);
-        ctx.closePath();
-        ctx.fill();
-      }
-    }
     ctx.restore();
   }
 
@@ -410,6 +395,7 @@
     if (state.sim) state.sim.setMembrane(el.membraneOn.checked);
     render();
   });
+  el.showMembrane.addEventListener('change', render);
   el.play.addEventListener('click', () => setPlaying(!state.playing));
   el.restart.addEventListener('click', restart);
   el.reset.addEventListener('click', resetSettings);
