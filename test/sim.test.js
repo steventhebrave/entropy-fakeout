@@ -287,31 +287,3 @@ test('switching the membrane off stops the sorting', () => {
   sim.advanceTo(40);
   assert.ok(sim.membraneBounces > bounces);
 });
-
-test('replay gives the recorded frames and exact positions between them', async () => {
-  const s = Sim.createInitialState({ n: 200, radius: 6, speed: 300, seed: 5, ...BOX });
-  const rec = await Sim.record(s, { duration: 6, fps: 60, snapshotEvery: 60 });
-  const replay = new Sim.Replay(rec);
-  const check = (view, f) => {
-    for (let i = 0; i < rec.n; i++) {
-      assert.equal(Math.fround(view.x[i]), rec.frames[(f * rec.n + i) * 2], `frame ${f} particle ${i}`);
-    }
-  };
-  // Forwards, backwards (back to a snapshot) and jumping ahead.
-  for (const f of [0, 1, 2, 59, 60, 61, 200, 130, 359, 7]) check(replay.at(f / 60), f);
-
-  // Between frames: inside the box, no overlaps, and between the frames on either side.
-  for (const t of [0.004, 1.5 + 1 / 240, 3.3333, 5.99]) {
-    const v = replay.at(t);
-    for (let i = 0; i < rec.n; i++) {
-      assert.ok(v.x[i] >= rec.radius - 1e-9 && v.x[i] <= rec.width - rec.radius + 1e-9);
-      for (let j = i + 1; j < rec.n; j++) {
-        assert.ok(Math.hypot(v.x[i] - v.x[j], v.y[i] - v.y[j]) >= 2 * rec.radius - 1e-6);
-      }
-    }
-  }
-
-  // The copy used for in-between positions never disturbs the replay.
-  replay.at(2.5 + 1 / 120);
-  check(replay.at(151 / 60), 151);
-});

@@ -47,7 +47,6 @@
 
   const state = {
     rec: null, // recorded trajectories
-    replay: null, // exact positions between recorded frames
     sort: null, // { labels, frame, time, split, boundary }
     order: null, // sortedness per frame
     frame: 0,
@@ -193,10 +192,6 @@
 
     const { n, radius: r, frames } = rec;
     const base = state.frame * n * 2;
-    // While playing, draw the exact positions at the playback time, which
-    // usually falls between recorded frames, so slow motion stays smooth.
-    // When paused or scrubbing, draw the recorded frame.
-    const view = state.playing && state.replay ? state.replay.at(state.playTime) : null;
     const coloured = el.colour.checked && state.sort;
     const groups = coloured
       ? [
@@ -208,8 +203,8 @@
       ctx.beginPath();
       for (let i = 0; i < n; i++) {
         if (label >= 0 && state.sort.labels[i] !== label) continue;
-        const x = view ? view.x[i] : frames[base + 2 * i];
-        const y = view ? view.y[i] : frames[base + 2 * i + 1];
+        const x = frames[base + 2 * i];
+        const y = frames[base + 2 * i + 1];
         ctx.moveTo(x + r, y);
         ctx.arc(x, y, r, 0, 2 * Math.PI);
       }
@@ -467,7 +462,6 @@
     const seconds = (performance.now() - started) / 1000;
 
     state.rec = rec;
-    state.replay = new Sim.Replay(rec);
     state.ranWith = settings;
     const drift = Math.abs(rec.energyEnd - rec.energyStart) / rec.energyStart;
     state.statsText =

@@ -43,12 +43,12 @@ time instant, because relabelling does not need a new simulation.
 
 The same seed gives the same trajectories every time.
 
-Frames are recorded every 1/60 s, but playback draws the exact positions at
-the current playback time, so slow motion stays smooth. The recording keeps
-a snapshot of the simulator every second; playback re-simulates from the
-nearest one, stepping exactly as the recording did, and advances a
-throwaway copy to the moment being shown. The membrane page does the same
-with its live simulation.
+For slow motion, lower the RMS speed rather than the playback speed. A
+hard-disk gas has no built-in timescale, so a gas at 75 px/s played at 1×
+looks just like one at 300 px/s played at quarter speed, and every frame is
+new, so it stays smooth. Scale the sort time and duration by the same
+factor. A seed gives a different run at a different speed, so search for
+seeds again after changing it.
 
 ### Corner start
 

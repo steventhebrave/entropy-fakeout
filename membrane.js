@@ -222,15 +222,8 @@
     const s = canvas.width / BOX.width;
     ctx.setTransform(s, 0, 0, s, 0, 0);
     drawMembrane(ctx, s, dpr);
-    const { labels } = state;
-    if (!state.sim) return;
-    // The simulation itself only steps in whole frames. Draw a throwaway copy
-    // advanced to the exact playback time, so slow motion stays smooth.
-    let sim = state.sim;
-    if (state.clock > state.frame / FPS) {
-      sim = sim.clone();
-      sim.advanceTo(state.clock);
-    }
+    const { sim, labels } = state;
+    if (!sim) return;
     const r = sim.r;
     for (const [label, colour] of [
       [Sim.BLUE, c.blue],
